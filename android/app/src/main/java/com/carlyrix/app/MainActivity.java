@@ -59,6 +59,45 @@ public class MainActivity extends Activity {
         subtitle.setPadding(0, 0, 0, 30);
         layout.addView(subtitle);
 
+        // --- Service Power Control ---
+        TextView powerLabel = new TextView(this);
+        powerLabel.setText("Service Power");
+        powerLabel.setTextColor(Color.WHITE);
+        powerLabel.setTextSize(18);
+        powerLabel.setPadding(0, 10, 0, 10);
+        powerLabel.setGravity(Gravity.CENTER);
+        layout.addView(powerLabel);
+
+        LinearLayout powerLayout = new LinearLayout(this);
+        powerLayout.setOrientation(LinearLayout.HORIZONTAL);
+        powerLayout.setGravity(Gravity.CENTER);
+        powerLayout.setPadding(0, 0, 0, 40);
+
+        // Use weight to split width 50/50
+        LinearLayout.LayoutParams btnParams = new LinearLayout.LayoutParams(
+                0, 140, 1.0f
+        );
+        btnParams.setMargins(10, 0, 10, 0);
+
+        Button btnStop = new Button(this);
+        btnStop.setText("STOP / OFF");
+        btnStop.setTextColor(Color.WHITE);
+        btnStop.setBackgroundColor(0xFFD32F2F); // Red
+        btnStop.setLayoutParams(btnParams);
+        btnStop.setOnClickListener(v -> stopLyricsService());
+
+        Button btnStart = new Button(this);
+        btnStart.setText("START / ON");
+        btnStart.setTextColor(Color.WHITE);
+        btnStart.setBackgroundColor(0xFF388E3C); // Green
+        btnStart.setLayoutParams(btnParams);
+        btnStart.setOnClickListener(v -> startLyricsService());
+
+        powerLayout.addView(btnStop);
+        powerLayout.addView(btnStart);
+        layout.addView(powerLayout);
+        // -----------------------------
+
         // --- Font Size Control Section ---
         TextView sizeLabel = new TextView(this);
         sizeLabel.setText("Adjust Text Size");
@@ -73,8 +112,8 @@ public class MainActivity extends Activity {
         sizeControlLayout.setGravity(Gravity.CENTER);
         sizeControlLayout.setPadding(0, 0, 0, 40);
 
-        Button btnMinus = createSquareButton("-", 0xFFD32F2F, v -> updateFontSize(-2));
-        Button btnPlus = createSquareButton("+", 0xFF388E3C, v -> updateFontSize(2));
+        Button btnMinus = createSquareButton("-", 0xFF424242, v -> updateFontSize(-2));
+        Button btnPlus = createSquareButton("+", 0xFF424242, v -> updateFontSize(2));
         
         sizeDisplay = new TextView(this);
         sizeDisplay.setText(String.valueOf(currentTextSize));
@@ -100,7 +139,7 @@ public class MainActivity extends Activity {
         layout.addView(instructions);
 
         // Main Action Buttons
-        layout.addView(createButton("1. ALLOW OVERLAY", 0xFF2E7D32, v -> requestOverlayPermission()));
+        layout.addView(createButton("1. ALLOW OVERLAY", 0xFF1565C0, v -> requestOverlayPermission()));
         
         layout.addView(new View(this), new LinearLayout.LayoutParams(1, 30));
 
@@ -117,6 +156,21 @@ public class MainActivity extends Activity {
 
         scroll.addView(layout);
         setContentView(scroll);
+    }
+
+    private void startLyricsService() {
+        Intent intent = new Intent(this, LyricsOverlayService.class);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(intent);
+        } else {
+            startService(intent);
+        }
+        Toast.makeText(this, "Service Started", Toast.LENGTH_SHORT).show();
+    }
+
+    private void stopLyricsService() {
+        stopService(new Intent(this, LyricsOverlayService.class));
+        Toast.makeText(this, "Service Stopped", Toast.LENGTH_SHORT).show();
     }
 
     private void updateFontSize(int delta) {
