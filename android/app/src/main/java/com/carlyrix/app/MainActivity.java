@@ -23,9 +23,10 @@ public class MainActivity extends Activity {
 
     private SharedPreferences prefs;
     private TextView sizeDisplay;
-    private Button btnLock; // Reference to update text/color
+    private Button btnLock, btnVisibility;
     private int currentTextSize;
     private boolean isLocked;
+    private boolean isVisible;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -33,7 +34,8 @@ public class MainActivity extends Activity {
         
         prefs = PreferenceManager.getDefaultSharedPreferences(this);
         currentTextSize = prefs.getInt("pref_font_size", 34); // Default 34
-        isLocked = prefs.getBoolean("pref_is_locked", false); // Default unlocked
+        isLocked = prefs.getBoolean("pref_is_locked", false);
+        isVisible = prefs.getBoolean("pref_is_visible", true);
 
         // Dark theme background
         ScrollView scroll = new ScrollView(this);
@@ -62,63 +64,31 @@ public class MainActivity extends Activity {
         subtitle.setPadding(0, 0, 0, 30);
         layout.addView(subtitle);
 
-        // --- Service Power Control ---
-        TextView powerLabel = new TextView(this);
-        powerLabel.setText("Service Power");
-        powerLabel.setTextColor(Color.WHITE);
-        powerLabel.setTextSize(18);
-        powerLabel.setPadding(0, 10, 0, 10);
-        powerLabel.setGravity(Gravity.CENTER);
-        layout.addView(powerLabel);
-
-        LinearLayout powerLayout = new LinearLayout(this);
-        powerLayout.setOrientation(LinearLayout.HORIZONTAL);
-        powerLayout.setGravity(Gravity.CENTER);
-        powerLayout.setPadding(0, 0, 0, 20);
-
-        LinearLayout.LayoutParams btnParams = new LinearLayout.LayoutParams(
-                0, 140, 1.0f
-        );
-        btnParams.setMargins(10, 0, 10, 0);
-
-        Button btnStop = new Button(this);
-        btnStop.setText("STOP / OFF");
-        btnStop.setTextColor(Color.WHITE);
-        btnStop.setBackgroundColor(0xFFD32F2F); // Red
-        btnStop.setLayoutParams(btnParams);
-        btnStop.setOnClickListener(v -> stopLyricsService());
-
-        Button btnStart = new Button(this);
-        btnStart.setText("START / ON");
-        btnStart.setTextColor(Color.WHITE);
-        btnStart.setBackgroundColor(0xFF388E3C); // Green
-        btnStart.setLayoutParams(btnParams);
-        btnStart.setOnClickListener(v -> startLyricsService());
-
-        powerLayout.addView(btnStop);
-        powerLayout.addView(btnStart);
-        layout.addView(powerLayout);
-
-        // --- Lock / Pass-Through Control ---
-        // This button toggles touch interception
+        // --- Lock & Visibility Control ---
+        // Lock button (Pass-through)
         btnLock = new Button(this);
-        updateLockButtonUI(); // Set initial text/color
-        
-        LinearLayout.LayoutParams lockParams = new LinearLayout.LayoutParams(
+        updateLockButton();
+        LinearLayout.LayoutParams fullWidthParams = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 140
         );
-        lockParams.setMargins(10, 0, 10, 40);
-        btnLock.setLayoutParams(lockParams);
-        btnLock.setOnClickListener(v -> toggleLockState());
+        fullWidthParams.setMargins(10, 0, 10, 20);
+        btnLock.setLayoutParams(fullWidthParams);
+        btnLock.setOnClickListener(v -> toggleLock());
         layout.addView(btnLock);
-        // -----------------------------
+
+        // Visibility button
+        btnVisibility = new Button(this);
+        updateVisibilityButton();
+        btnVisibility.setLayoutParams(fullWidthParams);
+        btnVisibility.setOnClickListener(v -> toggleVisibility());
+        layout.addView(btnVisibility);
 
         // --- Font Size Control Section ---
         TextView sizeLabel = new TextView(this);
-        sizeLabel.setText("Adjust Text Size");
+        sizeLabel.setText("Text Size");
         sizeLabel.setTextColor(Color.WHITE);
         sizeLabel.setTextSize(18);
-        sizeLabel.setPadding(0, 10, 0, 10);
+        sizeLabel.setPadding(0, 20, 0, 10);
         sizeLabel.setGravity(Gravity.CENTER);
         layout.addView(sizeLabel);
 
@@ -144,73 +114,72 @@ public class MainActivity extends Activity {
         layout.addView(sizeControlLayout);
         // ---------------------------------
 
-        // Instructions
+        // Permissions
         TextView instructions = new TextView(this);
-        instructions.setText("Grant permissions below. Lyrics will float over maps/launcher.");
+        instructions.setText("Required Permissions:");
         instructions.setTextColor(Color.LTGRAY);
         instructions.setTextSize(14);
         instructions.setGravity(Gravity.CENTER);
-        instructions.setPadding(20, 0, 20, 20);
+        instructions.setPadding(20, 0, 20, 10);
         layout.addView(instructions);
 
-        // Main Action Buttons
         layout.addView(createButton("1. ALLOW OVERLAY", 0xFF1565C0, v -> requestOverlayPermission()));
-        
-        layout.addView(new View(this), new LinearLayout.LayoutParams(1, 30));
-
+        layout.addView(new View(this), new LinearLayout.LayoutParams(1, 20));
         layout.addView(createButton("2. ALLOW MEDIA ACCESS", 0xFF1565C0, v -> requestNotificationAccess()));
-
-        // Status / Footer
-        TextView footer = new TextView(this);
-        footer.setText("\nGestures:\nDouble Tap: Change Color\nDrag: Move Position\nLong Press: Change Mode");
-        footer.setTextColor(0xFF757575);
-        footer.setTextSize(14);
-        footer.setGravity(Gravity.CENTER);
-        footer.setPadding(0, 20, 0, 0);
-        layout.addView(footer);
 
         scroll.addView(layout);
         setContentView(scroll);
     }
 
-    private void startLyricsService() {
+    private void toggleLock() {
+        isLocked = !isLocked;
+        prefs.edit().putBoolean("pref_is_locked", isLocked).apply();
+        updateLockButton();
+        
         Intent intent = new Intent(this, LyricsOverlayService.class);
-        // Sync lock state on start
-        intent.putExtra("init_locked", isLocked);
+        intent.setAction("ACTION_UPDATE_LOCK_STATE");
+        intent.putExtra("locked", isLocked);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             startForegroundService(intent);
         } else {
             startService(intent);
         }
-        Toast.makeText(this, "Service Started", Toast.LENGTH_SHORT).show();
     }
 
-    private void stopLyricsService() {
-        stopService(new Intent(this, LyricsOverlayService.class));
-        Toast.makeText(this, "Service Stopped", Toast.LENGTH_SHORT).show();
-    }
+    private void toggleVisibility() {
+        isVisible = !isVisible;
+        prefs.edit().putBoolean("pref_is_visible", isVisible).apply();
+        updateVisibilityButton();
 
-    private void toggleLockState() {
-        isLocked = !isLocked;
-        prefs.edit().putBoolean("pref_is_locked", isLocked).apply();
-        updateLockButtonUI();
-
-        // Send new state to service
         Intent intent = new Intent(this, LyricsOverlayService.class);
-        intent.setAction("ACTION_UPDATE_LOCK_STATE");
-        intent.putExtra("locked", isLocked);
-        startService(intent);
+        intent.setAction("ACTION_UPDATE_VISIBILITY");
+        intent.putExtra("visible", isVisible);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(intent);
+        } else {
+            startService(intent);
+        }
     }
 
-    private void updateLockButtonUI() {
+    private void updateLockButton() {
         if (isLocked) {
             btnLock.setText("UNLOCK TOUCH (Enable Move)");
-            btnLock.setBackgroundColor(0xFFFFA000); // Amber/Warning
+            btnLock.setBackgroundColor(0xFFFFA000); // Amber/Orange
             btnLock.setTextColor(Color.BLACK);
         } else {
-            btnLock.setText("LOCK TOUCH (Pass-Through)");
-            btnLock.setBackgroundColor(0xFF0091EA); // Blue
+            btnLock.setText("LOCK TOUCH (Enable Pass-Through)");
+            btnLock.setBackgroundColor(0xFF0091EA); // Light Blue
             btnLock.setTextColor(Color.WHITE);
+        }
+    }
+
+    private void updateVisibilityButton() {
+        if (isVisible) {
+            btnVisibility.setText("HIDE LYRICS");
+            btnVisibility.setBackgroundColor(0xFF546E7A); // Blue Grey
+        } else {
+            btnVisibility.setText("SHOW LYRICS");
+            btnVisibility.setBackgroundColor(0xFF78909C);
         }
     }
 
@@ -221,26 +190,28 @@ public class MainActivity extends Activity {
 
         sizeDisplay.setText(String.valueOf(currentTextSize));
         
-        // Save to Prefs
         prefs.edit().putInt("pref_font_size", currentTextSize).apply();
 
-        // Notify Service immediately
         Intent intent = new Intent(this, LyricsOverlayService.class);
         intent.setAction("ACTION_UPDATE_CONFIG");
         intent.putExtra("font_size", currentTextSize);
-        startService(intent);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(intent);
+        } else {
+            startService(intent);
+        }
     }
 
     private Button createButton(String text, int color, View.OnClickListener listener) {
         Button btn = new Button(this);
         btn.setText(text);
         btn.setTextColor(Color.WHITE);
-        btn.setTextSize(18);
+        btn.setTextSize(16);
         btn.setBackgroundColor(color);
         btn.setPadding(30, 20, 30, 20);
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 
-                140 
+                120 
         );
         btn.setLayoutParams(params);
         btn.setOnClickListener(listener);

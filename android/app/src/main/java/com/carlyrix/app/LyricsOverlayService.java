@@ -38,7 +38,8 @@ import java.util.List;
  * - Fallback to Broadcast Intents for older music apps.
  * - Overlay Lyrics.
  * - Touch Gestures: Drag (Move), Double Tap (Cycle Color), Long Press (Capture Mode).
- * - Pass-through (Lock) Mode: Allows touching apps behind the overlay.
+ * - Lock Mode: Passes touches to underlying apps.
+ * - Hide/Show toggles.
  */
 public class LyricsOverlayService extends NotificationListenerService implements MediaSessionManager.OnActiveSessionsChangedListener {
 
@@ -55,7 +56,8 @@ public class LyricsOverlayService extends NotificationListenerService implements
     // UI Configuration
     private int currentFontSize = 34;
     private int currentTextColor = Color.GREEN;
-    private boolean isLocked = false; // If true, touch events pass through
+    private boolean isLocked = false;
+    private boolean isVisible = true;
     
     // Capture Modes
     private static final int MODE_AUTO = 0;
@@ -81,6 +83,7 @@ public class LyricsOverlayService extends NotificationListenerService implements
     private static final String CHANNEL_ID = "carlyrix_service_channel";
     private static final String ACTION_UPDATE_CONFIG = "ACTION_UPDATE_CONFIG";
     private static final String ACTION_UPDATE_LOCK_STATE = "ACTION_UPDATE_LOCK_STATE";
+    private static final String ACTION_UPDATE_VISIBILITY = "ACTION_UPDATE_VISIBILITY";
 
     // Internal Callback for MediaController events
     private final MediaController.Callback mediaCallback = new MediaController.Callback() {
@@ -91,9 +94,10 @@ public class LyricsOverlayService extends NotificationListenerService implements
 
         @Override
         public void onPlaybackStateChanged(PlaybackState state) {
+            // Ensure visible if playing (unless manually hidden)
             if (state != null && state.getState() == PlaybackState.STATE_PLAYING) {
-                if (lyricsView != null && lyricsView.getAlpha() < 1.0f) {
-                    lyricsView.setAlpha(1.0f);
+                if (lyricsView != null && isVisible && lyricsView.getVisibility() != View.VISIBLE) {
+                    lyricsView.setVisibility(View.VISIBLE);
                 }
             }
         }
@@ -107,6 +111,7 @@ public class LyricsOverlayService extends NotificationListenerService implements
         SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(this);
         currentFontSize = prefs.getInt("pref_font_size", 34);
         isLocked = prefs.getBoolean("pref_is_locked", false);
+        isVisible = prefs.getBoolean("pref_is_visible", true);
 
         startForegroundServiceNotification();
         createOverlay();
@@ -145,6 +150,17 @@ public class LyricsOverlayService extends NotificationListenerService implements
         if (intent != null) {
             String action = intent.getAction();
             
+            // Initialization extras
+            if (intent.hasExtra("init_locked")) {
+                boolean initLocked = intent.getBooleanExtra("init_locked", false);
+                if (initLocked != isLocked) setLockState(initLocked);
+            }
+            if (intent.hasExtra("init_visible")) {
+                boolean initVisible = intent.getBooleanExtra("init_visible", true);
+                if (initVisible != isVisible) setVisibilityState(initVisible);
+            }
+
+            // Action handling
             if (ACTION_UPDATE_CONFIG.equals(action)) {
                 int newSize = intent.getIntExtra("font_size", -1);
                 if (newSize > 0) {
@@ -154,12 +170,9 @@ public class LyricsOverlayService extends NotificationListenerService implements
             } else if (ACTION_UPDATE_LOCK_STATE.equals(action)) {
                 boolean locked = intent.getBooleanExtra("locked", false);
                 setLockState(locked);
-            } else if (intent.hasExtra("init_locked")) {
-                // Ensure state matches start intent just in case
-                boolean locked = intent.getBooleanExtra("init_locked", false);
-                if (locked != isLocked) {
-                    setLockState(locked);
-                }
+            } else if (ACTION_UPDATE_VISIBILITY.equals(action)) {
+                boolean visible = intent.getBooleanExtra("visible", true);
+                setVisibilityState(visible);
             }
         }
         return START_STICKY; 
@@ -183,6 +196,13 @@ public class LyricsOverlayService extends NotificationListenerService implements
             windowManager.updateViewLayout(lyricsView, params);
         } catch (Exception e) {
             Log.e("CarLyrix", "Update Layout Error: " + e.getMessage());
+        }
+    }
+
+    private void setVisibilityState(boolean visible) {
+        this.isVisible = visible;
+        if (lyricsView != null) {
+            lyricsView.setVisibility(visible ? View.VISIBLE : View.GONE);
         }
     }
 
@@ -228,7 +248,7 @@ public class LyricsOverlayService extends NotificationListenerService implements
             processControllers(controllers);
         } catch (SecurityException e) {
             // If permission missing, we might still get data via BroadcastReceiver
-            // Wait for BroadcastReceiver to catch legacy intents
+            showTemporaryMessage("Notice: Media Permission Check");
         }
     }
 
@@ -390,8 +410,6 @@ public class LyricsOverlayService extends NotificationListenerService implements
         lyricsView = new TextView(this);
         
         applyStyle(); 
-        
-        // Ensure text is visible immediately so the user knows it's working
         lyricsView.setText("CarLyrix: Initializing...");
         
         lyricsView.setShadowLayer(8, 0, 0, Color.BLACK);
@@ -399,6 +417,8 @@ public class LyricsOverlayService extends NotificationListenerService implements
         lyricsView.setGravity(Gravity.CENTER);
         lyricsView.setBackgroundColor(Color.TRANSPARENT); 
         lyricsView.setPadding(20, 10, 20, 10);
+        
+        if (!isVisible) lyricsView.setVisibility(View.GONE);
 
         int layoutType = (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) 
                 ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY 
@@ -406,8 +426,8 @@ public class LyricsOverlayService extends NotificationListenerService implements
 
         int flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | 
                     WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL |
-                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN | // Crucial for visibility near edges
-                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS; // Allow drawing over status bars
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN | 
+                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS;
         
         // If locked initially, add FLAG_NOT_TOUCHABLE
         if (isLocked) {
@@ -430,7 +450,6 @@ public class LyricsOverlayService extends NotificationListenerService implements
             windowManager.addView(lyricsView, params);
         } catch (Exception e) {
             Log.e("CarLyrix", "Overlay Error: " + e.getMessage());
-            // This is the most common reason for "Can't see lyrics"
             Toast.makeText(this, "Error: Overlay Permission Missing?", Toast.LENGTH_LONG).show();
         }
     }
