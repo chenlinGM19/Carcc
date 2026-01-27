@@ -27,6 +27,7 @@ import android.view.View;
 import android.view.ViewConfiguration;
 import android.view.WindowManager;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import java.util.List;
 
@@ -227,7 +228,7 @@ public class LyricsOverlayService extends NotificationListenerService implements
             processControllers(controllers);
         } catch (SecurityException e) {
             // If permission missing, we might still get data via BroadcastReceiver
-            showTemporaryMessage("Notice: Media Permission Check");
+            // Wait for BroadcastReceiver to catch legacy intents
         }
     }
 
@@ -390,6 +391,9 @@ public class LyricsOverlayService extends NotificationListenerService implements
         
         applyStyle(); 
         
+        // Ensure text is visible immediately so the user knows it's working
+        lyricsView.setText("CarLyrix: Initializing...");
+        
         lyricsView.setShadowLayer(8, 0, 0, Color.BLACK);
         lyricsView.setTypeface(null, android.graphics.Typeface.BOLD);
         lyricsView.setGravity(Gravity.CENTER);
@@ -401,7 +405,9 @@ public class LyricsOverlayService extends NotificationListenerService implements
                 : WindowManager.LayoutParams.TYPE_PHONE;
 
         int flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | 
-                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL;
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL |
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN | // Crucial for visibility near edges
+                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS; // Allow drawing over status bars
         
         // If locked initially, add FLAG_NOT_TOUCHABLE
         if (isLocked) {
@@ -424,6 +430,8 @@ public class LyricsOverlayService extends NotificationListenerService implements
             windowManager.addView(lyricsView, params);
         } catch (Exception e) {
             Log.e("CarLyrix", "Overlay Error: " + e.getMessage());
+            // This is the most common reason for "Can't see lyrics"
+            Toast.makeText(this, "Error: Overlay Permission Missing?", Toast.LENGTH_LONG).show();
         }
     }
 
