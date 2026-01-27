@@ -2,11 +2,13 @@ package com.carlyrix.app;
 
 import android.app.Activity;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.preference.PreferenceManager;
 import android.provider.Settings;
 import android.view.Gravity;
 import android.view.View;
@@ -19,10 +21,17 @@ import android.widget.Toast;
 
 public class MainActivity extends Activity {
 
+    private SharedPreferences prefs;
+    private TextView sizeDisplay;
+    private int currentTextSize;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         
+        prefs = PreferenceManager.getDefaultSharedPreferences(this);
+        currentTextSize = prefs.getInt("pref_font_size", 34); // Default 34
+
         // Dark theme background
         ScrollView scroll = new ScrollView(this);
         scroll.setBackgroundColor(0xFF121212);
@@ -50,34 +59,81 @@ public class MainActivity extends Activity {
         subtitle.setPadding(0, 0, 0, 30);
         layout.addView(subtitle);
 
+        // --- Font Size Control Section ---
+        TextView sizeLabel = new TextView(this);
+        sizeLabel.setText("Adjust Text Size");
+        sizeLabel.setTextColor(Color.WHITE);
+        sizeLabel.setTextSize(18);
+        sizeLabel.setPadding(0, 10, 0, 10);
+        sizeLabel.setGravity(Gravity.CENTER);
+        layout.addView(sizeLabel);
+
+        LinearLayout sizeControlLayout = new LinearLayout(this);
+        sizeControlLayout.setOrientation(LinearLayout.HORIZONTAL);
+        sizeControlLayout.setGravity(Gravity.CENTER);
+        sizeControlLayout.setPadding(0, 0, 0, 40);
+
+        Button btnMinus = createSquareButton("-", 0xFFD32F2F, v -> updateFontSize(-2));
+        Button btnPlus = createSquareButton("+", 0xFF388E3C, v -> updateFontSize(2));
+        
+        sizeDisplay = new TextView(this);
+        sizeDisplay.setText(String.valueOf(currentTextSize));
+        sizeDisplay.setTextColor(Color.WHITE);
+        sizeDisplay.setTextSize(24);
+        sizeDisplay.setTypeface(null, Typeface.BOLD);
+        sizeDisplay.setGravity(Gravity.CENTER);
+        sizeDisplay.setLayoutParams(new LinearLayout.LayoutParams(150, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        sizeControlLayout.addView(btnMinus);
+        sizeControlLayout.addView(sizeDisplay);
+        sizeControlLayout.addView(btnPlus);
+        layout.addView(sizeControlLayout);
+        // ---------------------------------
+
         // Instructions
         TextView instructions = new TextView(this);
-        instructions.setText("Grant permissions below. Once active, this app will show lyrics floating over your map or launcher when you play music from your phone.");
-        instructions.setTextColor(Color.WHITE);
-        instructions.setTextSize(16);
+        instructions.setText("Grant permissions below. Lyrics will float over maps/launcher.");
+        instructions.setTextColor(Color.LTGRAY);
+        instructions.setTextSize(14);
         instructions.setGravity(Gravity.CENTER);
-        instructions.setPadding(20, 0, 20, 40);
+        instructions.setPadding(20, 0, 20, 20);
         layout.addView(instructions);
 
-        // Buttons
+        // Main Action Buttons
         layout.addView(createButton("1. ALLOW OVERLAY", 0xFF2E7D32, v -> requestOverlayPermission()));
         
-        // Spacer
         layout.addView(new View(this), new LinearLayout.LayoutParams(1, 30));
 
         layout.addView(createButton("2. ALLOW MEDIA ACCESS", 0xFF1565C0, v -> requestNotificationAccess()));
 
         // Status / Footer
         TextView footer = new TextView(this);
-        footer.setText("\nGestures:\nDouble Tap: Change Style\nDrag: Move Position\nLong Press: Change Mode");
+        footer.setText("\nGestures:\nDouble Tap: Change Color\nDrag: Move Position\nLong Press: Change Mode");
         footer.setTextColor(0xFF757575);
         footer.setTextSize(14);
         footer.setGravity(Gravity.CENTER);
-        footer.setPadding(0, 40, 0, 0);
+        footer.setPadding(0, 20, 0, 0);
         layout.addView(footer);
 
         scroll.addView(layout);
         setContentView(scroll);
+    }
+
+    private void updateFontSize(int delta) {
+        currentTextSize += delta;
+        if (currentTextSize < 12) currentTextSize = 12;
+        if (currentTextSize > 90) currentTextSize = 90;
+
+        sizeDisplay.setText(String.valueOf(currentTextSize));
+        
+        // Save to Prefs
+        prefs.edit().putInt("pref_font_size", currentTextSize).apply();
+
+        // Notify Service immediately
+        Intent intent = new Intent(this, LyricsOverlayService.class);
+        intent.setAction("ACTION_UPDATE_CONFIG");
+        intent.putExtra("font_size", currentTextSize);
+        startService(intent);
     }
 
     private Button createButton(String text, int color, View.OnClickListener listener) {
@@ -87,12 +143,22 @@ public class MainActivity extends Activity {
         btn.setTextSize(18);
         btn.setBackgroundColor(color);
         btn.setPadding(30, 20, 30, 20);
-        
-        // Layout params for big easy-to-hit buttons
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 
-                140 // Fixed height for ease of use in car
+                140 
         );
+        btn.setLayoutParams(params);
+        btn.setOnClickListener(listener);
+        return btn;
+    }
+
+    private Button createSquareButton(String text, int color, View.OnClickListener listener) {
+        Button btn = new Button(this);
+        btn.setText(text);
+        btn.setTextColor(Color.WHITE);
+        btn.setTextSize(24);
+        btn.setBackgroundColor(color);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(120, 120);
         btn.setLayoutParams(params);
         btn.setOnClickListener(listener);
         return btn;
