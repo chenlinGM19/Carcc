@@ -23,7 +23,9 @@ public class MainActivity extends Activity {
 
     private SharedPreferences prefs;
     private TextView sizeDisplay;
+    private Button btnLock; // Reference to update text/color
     private int currentTextSize;
+    private boolean isLocked;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -31,6 +33,7 @@ public class MainActivity extends Activity {
         
         prefs = PreferenceManager.getDefaultSharedPreferences(this);
         currentTextSize = prefs.getInt("pref_font_size", 34); // Default 34
+        isLocked = prefs.getBoolean("pref_is_locked", false); // Default unlocked
 
         // Dark theme background
         ScrollView scroll = new ScrollView(this);
@@ -71,9 +74,8 @@ public class MainActivity extends Activity {
         LinearLayout powerLayout = new LinearLayout(this);
         powerLayout.setOrientation(LinearLayout.HORIZONTAL);
         powerLayout.setGravity(Gravity.CENTER);
-        powerLayout.setPadding(0, 0, 0, 40);
+        powerLayout.setPadding(0, 0, 0, 20);
 
-        // Use weight to split width 50/50
         LinearLayout.LayoutParams btnParams = new LinearLayout.LayoutParams(
                 0, 140, 1.0f
         );
@@ -96,6 +98,19 @@ public class MainActivity extends Activity {
         powerLayout.addView(btnStop);
         powerLayout.addView(btnStart);
         layout.addView(powerLayout);
+
+        // --- Lock / Pass-Through Control ---
+        // This button toggles touch interception
+        btnLock = new Button(this);
+        updateLockButtonUI(); // Set initial text/color
+        
+        LinearLayout.LayoutParams lockParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 140
+        );
+        lockParams.setMargins(10, 0, 10, 40);
+        btnLock.setLayoutParams(lockParams);
+        btnLock.setOnClickListener(v -> toggleLockState());
+        layout.addView(btnLock);
         // -----------------------------
 
         // --- Font Size Control Section ---
@@ -160,6 +175,8 @@ public class MainActivity extends Activity {
 
     private void startLyricsService() {
         Intent intent = new Intent(this, LyricsOverlayService.class);
+        // Sync lock state on start
+        intent.putExtra("init_locked", isLocked);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             startForegroundService(intent);
         } else {
@@ -171,6 +188,30 @@ public class MainActivity extends Activity {
     private void stopLyricsService() {
         stopService(new Intent(this, LyricsOverlayService.class));
         Toast.makeText(this, "Service Stopped", Toast.LENGTH_SHORT).show();
+    }
+
+    private void toggleLockState() {
+        isLocked = !isLocked;
+        prefs.edit().putBoolean("pref_is_locked", isLocked).apply();
+        updateLockButtonUI();
+
+        // Send new state to service
+        Intent intent = new Intent(this, LyricsOverlayService.class);
+        intent.setAction("ACTION_UPDATE_LOCK_STATE");
+        intent.putExtra("locked", isLocked);
+        startService(intent);
+    }
+
+    private void updateLockButtonUI() {
+        if (isLocked) {
+            btnLock.setText("UNLOCK TOUCH (Enable Move)");
+            btnLock.setBackgroundColor(0xFFFFA000); // Amber/Warning
+            btnLock.setTextColor(Color.BLACK);
+        } else {
+            btnLock.setText("LOCK TOUCH (Pass-Through)");
+            btnLock.setBackgroundColor(0xFF0091EA); // Blue
+            btnLock.setTextColor(Color.WHITE);
+        }
     }
 
     private void updateFontSize(int delta) {
