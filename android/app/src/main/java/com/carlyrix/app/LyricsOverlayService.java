@@ -8,6 +8,7 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.graphics.PixelFormat;
 import android.media.MediaMetadata;
@@ -17,6 +18,7 @@ import android.media.session.PlaybackState;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.preference.PreferenceManager;
 import android.service.notification.NotificationListenerService;
 import android.util.Log;
 import android.view.Gravity;
@@ -34,7 +36,7 @@ import java.util.List;
  * - Listens to MediaSession (Bluetooth AVRCP).
  * - Fallback to Broadcast Intents for older music apps.
  * - Overlay Lyrics.
- * - Touch Gestures: Drag (Move), Double Tap (Style), Long Press (Capture Mode).
+ * - Touch Gestures: Drag (Move), Double Tap (Cycle Color), Long Press (Capture Mode).
  */
 public class LyricsOverlayService extends NotificationListenerService implements MediaSessionManager.OnActiveSessionsChangedListener {
 
@@ -74,6 +76,7 @@ public class LyricsOverlayService extends NotificationListenerService implements
 
     private BroadcastReceiver legacyReceiver;
     private static final String CHANNEL_ID = "carlyrix_service_channel";
+    private static final String ACTION_UPDATE_CONFIG = "ACTION_UPDATE_CONFIG";
 
     // Internal Callback for MediaController events
     private final MediaController.Callback mediaCallback = new MediaController.Callback() {
@@ -95,6 +98,11 @@ public class LyricsOverlayService extends NotificationListenerService implements
     @Override
     public void onCreate() {
         super.onCreate();
+        
+        // Load saved preferences
+        SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(this);
+        currentFontSize = prefs.getInt("pref_font_size", 34);
+
         startForegroundServiceNotification();
         createOverlay();
         
@@ -129,7 +137,14 @@ public class LyricsOverlayService extends NotificationListenerService implements
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        // Ensure we stay alive
+        // Handle dynamic updates from MainActivity
+        if (intent != null && ACTION_UPDATE_CONFIG.equals(intent.getAction())) {
+            int newSize = intent.getIntExtra("font_size", -1);
+            if (newSize > 0) {
+                currentFontSize = newSize;
+                applyStyle();
+            }
+        }
         return START_STICKY; 
     }
 
@@ -407,7 +422,7 @@ public class LyricsOverlayService extends NotificationListenerService implements
                         if (!isDragging) {
                             long now = System.currentTimeMillis();
                             if (now - lastTapTime < 300) {
-                                cycleStyles(); // Double Tap
+                                cycleColors(); // Double Tap -> Color Only
                             }
                             lastTapTime = now;
                         }
@@ -418,22 +433,18 @@ public class LyricsOverlayService extends NotificationListenerService implements
         });
     }
 
-    private void cycleStyles() {
+    private void cycleColors() {
         if (currentTextColor == Color.GREEN) {
             currentTextColor = Color.CYAN;
-            currentFontSize = 38;
         } else if (currentTextColor == Color.CYAN) {
             currentTextColor = Color.YELLOW;
-            currentFontSize = 42;
         } else if (currentTextColor == Color.YELLOW) {
             currentTextColor = Color.WHITE;
-            currentFontSize = 48;
         } else {
             currentTextColor = Color.GREEN;
-            currentFontSize = 34;
         }
         applyStyle();
-        showTemporaryMessage("Style Changed");
+        showTemporaryMessage("Color Changed");
     }
     
     private void applyStyle() {
