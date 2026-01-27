@@ -37,6 +37,7 @@ import java.util.List;
  * - Fallback to Broadcast Intents for older music apps.
  * - Overlay Lyrics.
  * - Touch Gestures: Drag (Move), Double Tap (Cycle Color), Long Press (Capture Mode).
+ * - Pass-through (Lock) Mode: Allows touching apps behind the overlay.
  */
 public class LyricsOverlayService extends NotificationListenerService implements MediaSessionManager.OnActiveSessionsChangedListener {
 
@@ -53,6 +54,7 @@ public class LyricsOverlayService extends NotificationListenerService implements
     // UI Configuration
     private int currentFontSize = 34;
     private int currentTextColor = Color.GREEN;
+    private boolean isLocked = false; // If true, touch events pass through
     
     // Capture Modes
     private static final int MODE_AUTO = 0;
@@ -77,6 +79,7 @@ public class LyricsOverlayService extends NotificationListenerService implements
     private BroadcastReceiver legacyReceiver;
     private static final String CHANNEL_ID = "carlyrix_service_channel";
     private static final String ACTION_UPDATE_CONFIG = "ACTION_UPDATE_CONFIG";
+    private static final String ACTION_UPDATE_LOCK_STATE = "ACTION_UPDATE_LOCK_STATE";
 
     // Internal Callback for MediaController events
     private final MediaController.Callback mediaCallback = new MediaController.Callback() {
@@ -102,6 +105,7 @@ public class LyricsOverlayService extends NotificationListenerService implements
         // Load saved preferences
         SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(this);
         currentFontSize = prefs.getInt("pref_font_size", 34);
+        isLocked = prefs.getBoolean("pref_is_locked", false);
 
         startForegroundServiceNotification();
         createOverlay();
@@ -137,15 +141,48 @@ public class LyricsOverlayService extends NotificationListenerService implements
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        // Handle dynamic updates from MainActivity
-        if (intent != null && ACTION_UPDATE_CONFIG.equals(intent.getAction())) {
-            int newSize = intent.getIntExtra("font_size", -1);
-            if (newSize > 0) {
-                currentFontSize = newSize;
-                applyStyle();
+        if (intent != null) {
+            String action = intent.getAction();
+            
+            if (ACTION_UPDATE_CONFIG.equals(action)) {
+                int newSize = intent.getIntExtra("font_size", -1);
+                if (newSize > 0) {
+                    currentFontSize = newSize;
+                    applyStyle();
+                }
+            } else if (ACTION_UPDATE_LOCK_STATE.equals(action)) {
+                boolean locked = intent.getBooleanExtra("locked", false);
+                setLockState(locked);
+            } else if (intent.hasExtra("init_locked")) {
+                // Ensure state matches start intent just in case
+                boolean locked = intent.getBooleanExtra("init_locked", false);
+                if (locked != isLocked) {
+                    setLockState(locked);
+                }
             }
         }
         return START_STICKY; 
+    }
+
+    private void setLockState(boolean locked) {
+        this.isLocked = locked;
+        if (lyricsView == null || windowManager == null) return;
+
+        if (isLocked) {
+            // Add NOT_TOUCHABLE to let clicks pass through to underlying apps
+            params.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+            showTemporaryMessage("Locked (Touch-thru)");
+        } else {
+            // Remove NOT_TOUCHABLE to allow dragging/gestures
+            params.flags &= ~WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+            showTemporaryMessage("Unlocked");
+        }
+        
+        try {
+            windowManager.updateViewLayout(lyricsView, params);
+        } catch (Exception e) {
+            Log.e("CarLyrix", "Update Layout Error: " + e.getMessage());
+        }
     }
 
     @Override
@@ -153,7 +190,7 @@ public class LyricsOverlayService extends NotificationListenerService implements
         super.onListenerConnected();
         Log.i("CarLyrix", "Service Connected");
         scanForActiveSessions();
-        showTemporaryMessage("Ready\nPlay Music");
+        showTemporaryMessage(isLocked ? "Ready (Locked)" : "Ready (Unlocked)");
     }
 
     @Override
@@ -363,12 +400,19 @@ public class LyricsOverlayService extends NotificationListenerService implements
                 ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY 
                 : WindowManager.LayoutParams.TYPE_PHONE;
 
+        int flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | 
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL;
+        
+        // If locked initially, add FLAG_NOT_TOUCHABLE
+        if (isLocked) {
+            flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+        }
+
         params = new WindowManager.LayoutParams(
                 WindowManager.LayoutParams.WRAP_CONTENT,
                 WindowManager.LayoutParams.WRAP_CONTENT,
                 layoutType,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | 
-                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+                flags,
                 PixelFormat.TRANSLUCENT);
 
         params.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
@@ -389,6 +433,10 @@ public class LyricsOverlayService extends NotificationListenerService implements
         lyricsView.setOnTouchListener(new View.OnTouchListener() {
             @Override
             public boolean onTouch(View v, MotionEvent event) {
+                // If locked, we shouldn't be here (FLAG_NOT_TOUCHABLE prevents it), 
+                // but as a safety measure, return false.
+                if (isLocked) return false;
+
                 switch (event.getAction()) {
                     case MotionEvent.ACTION_DOWN:
                         startX = params.x;
