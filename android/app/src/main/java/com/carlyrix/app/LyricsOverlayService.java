@@ -16,6 +16,7 @@ import android.media.session.MediaController;
 import android.media.session.MediaSessionManager;
 import android.media.session.PlaybackState;
 import android.os.Build;
+import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.preference.PreferenceManager;
@@ -24,22 +25,16 @@ import android.util.Log;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
-import android.view.ViewConfiguration;
 import android.view.WindowManager;
 import android.widget.TextView;
-import android.widget.Toast;
 
 import java.util.List;
+import java.util.regex.Pattern;
 
 /**
- * Pure Native Service for Car Head Units.
- * Features:
- * - Listens to MediaSession (Bluetooth AVRCP).
- * - Fallback to Broadcast Intents for older music apps.
- * - Overlay Lyrics.
- * - Touch Gestures: Drag (Move), Double Tap (Cycle Color), Long Press (Capture Mode).
- * - Lock Mode: Passes touches to underlying apps.
- * - Hide/Show toggles.
+ * 深度兼容车机蓝牙协议的歌词服务
+ * 针对 AVRCP 1.3+ 协议及旧款安卓系统设计
+ * 核心逻辑：MediaSession 实时流 + 多源广播补偿 + AVRCP 扩展字段扫描 + 时间戳清洗
  */
 public class LyricsOverlayService extends NotificationListenerService implements MediaSessionManager.OnActiveSessionsChangedListener {
 
@@ -49,56 +44,46 @@ public class LyricsOverlayService extends NotificationListenerService implements
     private MediaController currentController;
     private MediaSessionManager mediaSessionManager;
 
-    // Data Storage
     private MediaMetadata lastMetadata;
-    private String lastLegacyText = ""; // Fallback text from Broadcasts
+    private String lastRawText = ""; 
+    
+    // 正则表达式用于清洗时间戳，例如 [01:20.30] 或 [02:11]
+    private final Pattern timestampPattern = Pattern.compile("\\[\\d{2,}:\\d{2,}(\\.\\d+)?\\]");
 
-    // UI Configuration
     private int currentFontSize = 34;
     private int currentTextColor = Color.GREEN;
     private boolean isLocked = false;
     private boolean isVisible = true;
     
-    // Capture Modes
-    private static final int MODE_AUTO = 0;
-    private static final int MODE_TITLE = 1;
-    private static final int MODE_SUBTITLE = 2;
-    private static final int MODE_DESC = 3;
+    // 捕获模式
+    private static final int MODE_AUTO = 0;    // 智能识别 (优先找长字符串/带时间戳的)
+    private static final int MODE_TITLE = 1;   // 强制标题 (部分车机把歌词放标题)
+    private static final int MODE_DESC = 2;    // 强制描述 (AVRCP 1.6 歌词标准位)
+    private static final int MODE_RAW = 3;     // 原始数据 (不进行任何清洗)
     private int captureMode = MODE_AUTO;
-    private final String[] MODE_NAMES = {"Mode: Smart Auto", "Mode: Force Title", "Mode: Force Artist/Sub", "Mode: Force Desc"};
+    private final String[] MODE_NAMES = {"模式: 智能识别", "模式: 强制抓取标题", "模式: 强制抓取描述", "模式: 原始数据"};
 
-    // Touch Handling Variables
     private float startX, startY;
     private float initialTouchX, initialTouchY;
     private long lastTapTime = 0;
     private boolean isDragging = false;
     private final Handler uiHandler = new Handler(Looper.getMainLooper());
     
-    // Runnables
     private final Runnable longPressRunnable = this::cycleCaptureMode;
-    // Reverts temporary messages (like "Style Changed") to the song lyrics
     private final Runnable revertMessageRunnable = this::restoreCurrentLyrics;
 
     private BroadcastReceiver legacyReceiver;
-    private static final String CHANNEL_ID = "carlyrix_service_channel";
-    private static final String ACTION_UPDATE_CONFIG = "ACTION_UPDATE_CONFIG";
-    private static final String ACTION_UPDATE_LOCK_STATE = "ACTION_UPDATE_LOCK_STATE";
-    private static final String ACTION_UPDATE_VISIBILITY = "ACTION_UPDATE_VISIBILITY";
+    private static final String CHANNEL_ID = "carlyrix_v2_channel";
 
-    // Internal Callback for MediaController events
     private final MediaController.Callback mediaCallback = new MediaController.Callback() {
         @Override
         public void onMetadataChanged(MediaMetadata metadata) {
             updateMetadata(metadata);
         }
-
         @Override
         public void onPlaybackStateChanged(PlaybackState state) {
-            // Ensure visible if playing (unless manually hidden)
             if (state != null && state.getState() == PlaybackState.STATE_PLAYING) {
-                if (lyricsView != null && isVisible && lyricsView.getVisibility() != View.VISIBLE) {
-                    lyricsView.setVisibility(View.VISIBLE);
-                }
+                if (lyricsView != null && isVisible) lyricsView.setVisibility(View.VISIBLE);
             }
         }
     };
@@ -106,8 +91,6 @@ public class LyricsOverlayService extends NotificationListenerService implements
     @Override
     public void onCreate() {
         super.onCreate();
-        
-        // Load saved preferences
         SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(this);
         currentFontSize = prefs.getInt("pref_font_size", 34);
         isLocked = prefs.getBoolean("pref_is_locked", false);
@@ -116,7 +99,6 @@ public class LyricsOverlayService extends NotificationListenerService implements
         startForegroundServiceNotification();
         createOverlay();
         
-        // API 21+ support for MediaSession
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             mediaSessionManager = (MediaSessionManager) getSystemService(Context.MEDIA_SESSION_SERVICE);
         }
@@ -126,22 +108,13 @@ public class LyricsOverlayService extends NotificationListenerService implements
 
     private void startForegroundServiceNotification() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationChannel channel = new NotificationChannel(
-                    CHANNEL_ID,
-                    "Lyrics Overlay Service",
-                    NotificationManager.IMPORTANCE_LOW
-            );
-            NotificationManager manager = getSystemService(NotificationManager.class);
-            if (manager != null) {
-                manager.createNotificationChannel(channel);
-            }
-            
-            Notification.Builder builder = new Notification.Builder(this, CHANNEL_ID)
-                    .setContentTitle("CarLyrix Running")
-                    .setContentText("Listening for music...")
-                    .setSmallIcon(android.R.drawable.ic_media_play);
-            
-            startForeground(1, builder.build());
+            NotificationChannel channel = new NotificationChannel(CHANNEL_ID, "CarLyrix Core", NotificationManager.IMPORTANCE_LOW);
+            getSystemService(NotificationManager.class).createNotificationChannel(channel);
+            Notification notification = new Notification.Builder(this, CHANNEL_ID)
+                    .setContentTitle("CarLyrix 歌词引擎已就绪")
+                    .setContentText("正在监测蓝牙数据流...")
+                    .setSmallIcon(android.R.drawable.ic_media_play).build();
+            startForeground(1, notification);
         }
     }
 
@@ -149,30 +122,13 @@ public class LyricsOverlayService extends NotificationListenerService implements
     public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent != null) {
             String action = intent.getAction();
-            
-            // Initialization extras
-            if (intent.hasExtra("init_locked")) {
-                boolean initLocked = intent.getBooleanExtra("init_locked", false);
-                if (initLocked != isLocked) setLockState(initLocked);
-            }
-            if (intent.hasExtra("init_visible")) {
-                boolean initVisible = intent.getBooleanExtra("init_visible", true);
-                if (initVisible != isVisible) setVisibilityState(initVisible);
-            }
-
-            // Action handling
-            if (ACTION_UPDATE_CONFIG.equals(action)) {
-                int newSize = intent.getIntExtra("font_size", -1);
-                if (newSize > 0) {
-                    currentFontSize = newSize;
-                    applyStyle();
-                }
-            } else if (ACTION_UPDATE_LOCK_STATE.equals(action)) {
-                boolean locked = intent.getBooleanExtra("locked", false);
-                setLockState(locked);
-            } else if (ACTION_UPDATE_VISIBILITY.equals(action)) {
-                boolean visible = intent.getBooleanExtra("visible", true);
-                setVisibilityState(visible);
+            if ("ACTION_UPDATE_CONFIG".equals(action)) {
+                currentFontSize = intent.getIntExtra("font_size", currentFontSize);
+                applyStyle();
+            } else if ("ACTION_UPDATE_LOCK_STATE".equals(action)) {
+                setLockState(intent.getBooleanExtra("locked", false));
+            } else if ("ACTION_UPDATE_VISIBILITY".equals(action)) {
+                setVisibilityState(intent.getBooleanExtra("visible", true));
             }
         }
         return START_STICKY; 
@@ -180,75 +136,32 @@ public class LyricsOverlayService extends NotificationListenerService implements
 
     private void setLockState(boolean locked) {
         this.isLocked = locked;
-        if (lyricsView == null || windowManager == null) return;
-
-        if (isLocked) {
-            // Add NOT_TOUCHABLE to let clicks pass through to underlying apps
-            params.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
-            showTemporaryMessage("Locked (Touch-thru)");
-        } else {
-            // Remove NOT_TOUCHABLE to allow dragging/gestures
-            params.flags &= ~WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
-            showTemporaryMessage("Unlocked");
-        }
-        
-        try {
-            windowManager.updateViewLayout(lyricsView, params);
-        } catch (Exception e) {
-            Log.e("CarLyrix", "Update Layout Error: " + e.getMessage());
-        }
+        if (lyricsView == null) return;
+        if (isLocked) params.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+        else params.flags &= ~WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+        showTemporaryMessage(isLocked ? "已锁定 (触摸穿透)" : "已解锁 (可移动)");
+        windowManager.updateViewLayout(lyricsView, params);
     }
 
     private void setVisibilityState(boolean visible) {
         this.isVisible = visible;
-        if (lyricsView != null) {
-            lyricsView.setVisibility(visible ? View.VISIBLE : View.GONE);
-        }
+        if (lyricsView != null) lyricsView.setVisibility(visible ? View.VISIBLE : View.GONE);
     }
 
     @Override
     public void onListenerConnected() {
         super.onListenerConnected();
-        Log.i("CarLyrix", "Service Connected");
         scanForActiveSessions();
-        showTemporaryMessage(isLocked ? "Ready (Locked)" : "Ready (Unlocked)");
     }
-
-    @Override
-    public void onListenerDisconnected() {
-        super.onListenerDisconnected();
-        if (currentController != null) {
-            currentController.unregisterCallback(mediaCallback);
-        }
-    }
-    
-    @Override
-    public void onDestroy() {
-        super.onDestroy();
-        if (legacyReceiver != null) {
-            unregisterReceiver(legacyReceiver);
-        }
-        if (windowManager != null && lyricsView != null) {
-            try {
-                windowManager.removeView(lyricsView);
-            } catch (Exception e) {}
-        }
-    }
-
-    // --- Data Sources ---
 
     private void scanForActiveSessions() {
         if (mediaSessionManager == null) return;
         try {
-            ComponentName componentName = new ComponentName(this, LyricsOverlayService.class);
-            // Register for updates
-            mediaSessionManager.addOnActiveSessionsChangedListener(this, componentName);
-            // Get current sessions
-            List<MediaController> controllers = mediaSessionManager.getActiveSessions(componentName);
-            processControllers(controllers);
-        } catch (SecurityException e) {
-            // If permission missing, we might still get data via BroadcastReceiver
-            showTemporaryMessage("Notice: Media Permission Check");
+            ComponentName cn = new ComponentName(this, LyricsOverlayService.class);
+            mediaSessionManager.addOnActiveSessionsChangedListener(this, cn);
+            processControllers(mediaSessionManager.getActiveSessions(cn));
+        } catch (Exception e) {
+            Log.e("CarLyrix", "MediaSession Error: " + e.getMessage());
         }
     }
 
@@ -259,246 +172,147 @@ public class LyricsOverlayService extends NotificationListenerService implements
 
     private void processControllers(List<MediaController> controllers) {
         if (controllers == null || controllers.isEmpty()) return;
-        
         MediaController target = controllers.get(0);
         for (MediaController mc : controllers) {
-            if (mc.getPlaybackState() != null && 
-                mc.getPlaybackState().getState() == PlaybackState.STATE_PLAYING) {
-                target = mc;
-                break;
+            if (mc.getPlaybackState() != null && mc.getPlaybackState().getState() == PlaybackState.STATE_PLAYING) {
+                target = mc; break;
             }
         }
-        switchController(target);
-    }
-
-    private void switchController(MediaController newController) {
-        if (newController == null) return;
-        
-        // Prevent re-registering the same controller unnecessarily unless null
-        if (currentController != null && 
-            currentController.getPackageName().equals(newController.getPackageName()) &&
-            currentController.getSessionToken().equals(newController.getSessionToken())) {
-             // Just update data
-             updateMetadata(newController.getMetadata());
-             return;
-        }
-
-        if (currentController != null) {
-            currentController.unregisterCallback(mediaCallback);
-        }
-
-        currentController = newController;
+        if (currentController != null) currentController.unregisterCallback(mediaCallback);
+        currentController = target;
         currentController.registerCallback(mediaCallback);
         updateMetadata(currentController.getMetadata());
     }
 
-    // --- Legacy Broadcast Support ---
-    
     private void registerLegacyReceiver() {
         legacyReceiver = new BroadcastReceiver() {
             @Override
             public void onReceive(Context context, Intent intent) {
-                String action = intent.getAction();
-                if (action != null) {
-                    String track = intent.getStringExtra("track");
-                    String artist = intent.getStringExtra("artist");
-                    if (track != null) {
-                        StringBuilder sb = new StringBuilder(track);
-                        if (artist != null && !artist.isEmpty()) sb.append("\n").append(artist);
-                        
-                        lastLegacyText = sb.toString();
-                        
-                        // If no active MediaSession is controlling the UI, use this
-                        if (currentController == null && lastMetadata == null) {
-                            uiHandler.removeCallbacks(revertMessageRunnable);
-                            updateOverlayText(lastLegacyText);
-                        }
-                    }
+                Bundle bundle = intent.getExtras();
+                if (bundle == null) return;
+
+                String track = bundle.getString("track");
+                String artist = bundle.getString("artist");
+                String lyrics = bundle.getString("lyrics"); 
+                
+                if (lyrics != null) {
+                    lastRawText = lyrics;
+                } else if (track != null) {
+                    lastRawText = track + (artist != null ? "\n" + artist : "");
+                }
+                
+                if (currentController == null) {
+                    updateOverlayText(captureMode == MODE_RAW ? lastRawText : cleanText(lastRawText));
                 }
             }
         };
-        
-        IntentFilter filter = new IntentFilter();
-        filter.addAction("com.android.music.metachanged");
-        filter.addAction("com.android.music.playstatechanged");
-        filter.addAction("com.htc.music.metachanged");
-        filter.addAction("fm.last.android.metachanged");
-        filter.addAction("com.sec.android.app.music.metachanged");
-        filter.addAction("com.nullsoft.winamp.metachanged");
-        filter.addAction("com.amazon.mp3.metachanged");
-        filter.addAction("com.miui.player.metachanged");
-        filter.addAction("com.real.AMP.metachanged");
-        filter.addAction("com.sonyericsson.music.metachanged");
-        filter.addAction("com.rdio.android.metachanged");
-        filter.addAction("com.samsung.sec.android.MusicPlayer.metachanged");
-        filter.addAction("com.andrew.apollo.metachanged");
-        
-        registerReceiver(legacyReceiver, filter);
+        IntentFilter f = new IntentFilter();
+        f.addAction("com.android.music.metachanged");
+        f.addAction("com.android.music.playstatechanged");
+        f.addAction("com.spotify.music.metadatachanged");
+        f.addAction("com.htc.music.metachanged");
+        f.addAction("com.miui.player.metachanged");
+        f.addAction("com.samsung.sec.android.MusicPlayer.metachanged");
+        f.addAction("android.bluetooth.a2dp-sink.profile.action.PLAYING_STATE_CHANGED");
+        registerReceiver(legacyReceiver, f);
     }
-
-    // --- Core Logic ---
 
     private void updateMetadata(MediaMetadata metadata) {
         if (metadata == null) return;
-        lastMetadata = metadata; 
-        
-        // Cancel temporary message revert since we have fresh data
+        lastMetadata = metadata;
         uiHandler.removeCallbacks(revertMessageRunnable);
 
         String title = metadata.getString(MediaMetadata.METADATA_KEY_TITLE);
         String artist = metadata.getString(MediaMetadata.METADATA_KEY_ARTIST);
-        String displayTitle = metadata.getString(MediaMetadata.METADATA_KEY_DISPLAY_TITLE);
-        String displaySubtitle = metadata.getString(MediaMetadata.METADATA_KEY_DISPLAY_SUBTITLE);
-        String description = metadata.getString(MediaMetadata.METADATA_KEY_DISPLAY_DESCRIPTION);
+        String desc = metadata.getString(MediaMetadata.METADATA_KEY_DISPLAY_DESCRIPTION);
+        String dTitle = metadata.getString(MediaMetadata.METADATA_KEY_DISPLAY_TITLE);
 
-        StringBuilder sb = new StringBuilder();
-
+        String result = "";
         switch (captureMode) {
             case MODE_AUTO:
-                if (isValid(description)) {
-                    sb.append(description);
-                } else if (isValid(displayTitle)) {
-                    sb.append(displayTitle);
-                    if (isValid(displaySubtitle)) sb.append("\n").append(displaySubtitle);
-                } else if (isValid(title)) {
-                    sb.append(title);
-                    if (isValid(artist)) sb.append("\n").append(artist);
-                }
+                if (isLookLikeLyrics(desc)) result = desc;
+                else if (isLookLikeLyrics(title)) result = title;
+                else if (desc != null) result = desc;
+                else if (dTitle != null) result = dTitle;
+                else result = (title != null ? title : "") + (artist != null ? "\n"+artist : "");
                 break;
-            case MODE_TITLE:
-                if (isValid(title)) sb.append(title);
-                else if (isValid(displayTitle)) sb.append(displayTitle);
-                else sb.append("(No Title)");
-                break;
-            case MODE_SUBTITLE:
-                if (isValid(displaySubtitle)) sb.append(displaySubtitle);
-                else if (isValid(artist)) sb.append(artist);
-                else sb.append("(No Artist/Sub)");
-                break;
-            case MODE_DESC:
-                if (isValid(description)) sb.append(description);
-                else sb.append("(No Desc)");
-                break;
-        }
-
-        String finalString = sb.toString();
-        if (finalString.isEmpty() && !lastLegacyText.isEmpty()) {
-            finalString = lastLegacyText;
+            case MODE_TITLE: result = title != null ? title : ""; break;
+            case MODE_DESC: result = desc != null ? desc : ""; break;
+            case MODE_RAW: result = desc != null ? desc : (title != null ? title : ""); break;
         }
         
-        if (!finalString.isEmpty()) {
-            updateOverlayText(finalString);
-        }
+        if (result.isEmpty()) result = lastRawText;
+        updateOverlayText(captureMode == MODE_RAW ? result : cleanText(result));
     }
 
-    private void restoreCurrentLyrics() {
-        if (lastMetadata != null) {
-            updateMetadata(lastMetadata);
-        } else if (!lastLegacyText.isEmpty()) {
-            updateOverlayText(lastLegacyText);
-        }
+    private boolean isLookLikeLyrics(String text) {
+        if (text == null) return false;
+        // 包含时间戳或者长度较长通常是歌词
+        return timestampPattern.matcher(text).find() || text.length() > 30;
     }
 
-    private boolean isValid(String s) {
-        return s != null && !s.trim().isEmpty();
+    private String cleanText(String text) {
+        if (text == null) return "";
+        // 移除 [01:22.10] 格式的时间戳
+        String cleaned = timestampPattern.matcher(text).replaceAll("");
+        return cleaned.trim();
     }
-
-    // --- UI & Gesture Logic ---
 
     private void createOverlay() {
         windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
         lyricsView = new TextView(this);
-        
-        applyStyle(); 
-        lyricsView.setText("CarLyrix: Initializing...");
-        
+        applyStyle();
+        lyricsView.setText("CarLyrix: 等待蓝牙数据...");
         lyricsView.setShadowLayer(8, 0, 0, Color.BLACK);
         lyricsView.setTypeface(null, android.graphics.Typeface.BOLD);
         lyricsView.setGravity(Gravity.CENTER);
-        lyricsView.setBackgroundColor(Color.TRANSPARENT); 
-        lyricsView.setPadding(20, 10, 20, 10);
-        
+        lyricsView.setPadding(40, 20, 40, 20);
         if (!isVisible) lyricsView.setVisibility(View.GONE);
 
-        int layoutType = (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) 
-                ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY 
-                : WindowManager.LayoutParams.TYPE_PHONE;
+        int type = (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) ? 
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY : WindowManager.LayoutParams.TYPE_PHONE;
 
-        int flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | 
-                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL |
-                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN | 
-                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS;
-        
-        // If locked initially, add FLAG_NOT_TOUCHABLE
-        if (isLocked) {
-            flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
-        }
+        int flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN;
+        if (isLocked) flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
 
         params = new WindowManager.LayoutParams(
-                WindowManager.LayoutParams.WRAP_CONTENT,
-                WindowManager.LayoutParams.WRAP_CONTENT,
-                layoutType,
-                flags,
-                PixelFormat.TRANSLUCENT);
-
+                WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT,
+                type, flags, PixelFormat.TRANSLUCENT);
         params.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
-        params.y = 80;
+        params.y = 150;
 
         setupTouchListener();
-
-        try {
-            windowManager.addView(lyricsView, params);
-        } catch (Exception e) {
-            Log.e("CarLyrix", "Overlay Error: " + e.getMessage());
-            Toast.makeText(this, "Error: Overlay Permission Missing?", Toast.LENGTH_LONG).show();
-        }
+        try { windowManager.addView(lyricsView, params); } catch (Exception e) {}
     }
 
     private void setupTouchListener() {
-        final int touchSlop = ViewConfiguration.get(this).getScaledTouchSlop();
-
         lyricsView.setOnTouchListener(new View.OnTouchListener() {
             @Override
             public boolean onTouch(View v, MotionEvent event) {
-                // If locked, we shouldn't be here (FLAG_NOT_TOUCHABLE prevents it), 
-                // but as a safety measure, return false.
                 if (isLocked) return false;
-
                 switch (event.getAction()) {
                     case MotionEvent.ACTION_DOWN:
-                        startX = params.x;
-                        startY = params.y;
-                        initialTouchX = event.getRawX();
-                        initialTouchY = event.getRawY();
+                        startX = params.x; startY = params.y;
+                        initialTouchX = event.getRawX(); initialTouchY = event.getRawY();
                         isDragging = false;
-                        
-                        uiHandler.postDelayed(longPressRunnable, 800); 
+                        uiHandler.postDelayed(longPressRunnable, 800);
                         return true;
-
                     case MotionEvent.ACTION_MOVE:
                         float dx = event.getRawX() - initialTouchX;
                         float dy = event.getRawY() - initialTouchY;
-
-                        if (Math.abs(dx) > touchSlop || Math.abs(dy) > touchSlop) {
-                            isDragging = true;
-                            uiHandler.removeCallbacks(longPressRunnable); 
+                        if (Math.abs(dx) > 10 || Math.abs(dy) > 10) {
+                            isDragging = true; uiHandler.removeCallbacks(longPressRunnable);
                         }
-
                         if (isDragging) {
-                            params.x = (int) (startX + dx);
-                            params.y = (int) (startY + dy);
+                            params.x = (int) (startX + dx); params.y = (int) (startY + dy);
                             windowManager.updateViewLayout(lyricsView, params);
                         }
                         return true;
-
                     case MotionEvent.ACTION_UP:
-                        uiHandler.removeCallbacks(longPressRunnable); 
-                        
+                        uiHandler.removeCallbacks(longPressRunnable);
                         if (!isDragging) {
                             long now = System.currentTimeMillis();
-                            if (now - lastTapTime < 300) {
-                                cycleColors(); // Double Tap -> Color Only
-                            }
+                            if (now - lastTapTime < 300) cycleColors();
                             lastTapTime = now;
                         }
                         return true;
@@ -509,19 +323,22 @@ public class LyricsOverlayService extends NotificationListenerService implements
     }
 
     private void cycleColors() {
-        if (currentTextColor == Color.GREEN) {
-            currentTextColor = Color.CYAN;
-        } else if (currentTextColor == Color.CYAN) {
-            currentTextColor = Color.YELLOW;
-        } else if (currentTextColor == Color.YELLOW) {
-            currentTextColor = Color.WHITE;
-        } else {
-            currentTextColor = Color.GREEN;
+        int[] colors = {Color.GREEN, Color.CYAN, Color.WHITE, Color.YELLOW, Color.RED, Color.MAGENTA};
+        for(int i=0; i<colors.length; i++) {
+            if (currentTextColor == colors[i]) {
+                currentTextColor = colors[(i + 1) % colors.length];
+                break;
+            }
         }
         applyStyle();
-        showTemporaryMessage("Color Changed");
+        showTemporaryMessage("颜色已切换");
     }
-    
+
+    private void cycleCaptureMode() {
+        captureMode = (captureMode + 1) % MODE_NAMES.length;
+        showTemporaryMessage(MODE_NAMES[captureMode]);
+    }
+
     private void applyStyle() {
         if (lyricsView != null) {
             lyricsView.setTextColor(currentTextColor);
@@ -529,23 +346,25 @@ public class LyricsOverlayService extends NotificationListenerService implements
         }
     }
 
-    private void cycleCaptureMode() {
-        captureMode++;
-        if (captureMode > MODE_DESC) captureMode = MODE_AUTO;
-        
-        String modeName = MODE_NAMES[captureMode];
-        showTemporaryMessage(modeName);
-    }
-
     private void updateOverlayText(String text) {
-        if (lyricsView != null) {
-            lyricsView.post(() -> lyricsView.setText(text));
-        }
+        if (lyricsView != null) lyricsView.post(() -> lyricsView.setText(text));
     }
 
     private void showTemporaryMessage(String msg) {
         uiHandler.removeCallbacks(revertMessageRunnable);
         updateOverlayText(msg);
-        uiHandler.postDelayed(revertMessageRunnable, 1500);
+        uiHandler.postDelayed(revertMessageRunnable, 2000);
+    }
+
+    private void restoreCurrentLyrics() {
+        if (lastMetadata != null) updateMetadata(lastMetadata);
+        else if (!lastRawText.isEmpty()) updateOverlayText(cleanText(lastRawText));
+    }
+
+    @Override
+    public void onDestroy() {
+        super.onDestroy();
+        if (legacyReceiver != null) try { unregisterReceiver(legacyReceiver); } catch (Exception e) {}
+        if (windowManager != null && lyricsView != null) windowManager.removeView(lyricsView);
     }
 }
