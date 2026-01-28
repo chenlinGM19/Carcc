@@ -33,11 +33,10 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         
         prefs = PreferenceManager.getDefaultSharedPreferences(this);
-        currentTextSize = prefs.getInt("pref_font_size", 34); // Default 34
+        currentTextSize = prefs.getInt("pref_font_size", 34);
         isLocked = prefs.getBoolean("pref_is_locked", false);
         isVisible = prefs.getBoolean("pref_is_visible", true);
 
-        // Dark theme background
         ScrollView scroll = new ScrollView(this);
         scroll.setBackgroundColor(0xFF121212);
         scroll.setFillViewport(true);
@@ -47,85 +46,61 @@ public class MainActivity extends Activity {
         layout.setPadding(40, 40, 40, 40);
         layout.setGravity(Gravity.CENTER_HORIZONTAL);
 
-        // Header
         TextView title = new TextView(this);
-        title.setText("CarLyrix");
-        title.setTextSize(32);
+        title.setText("CarLyrix 蓝牙修复版");
+        title.setTextSize(28);
         title.setTypeface(null, Typeface.BOLD);
-        title.setTextColor(0xFF00E5FF); // Cyan Accent
+        title.setTextColor(0xFF00E5FF);
         title.setGravity(Gravity.CENTER);
         layout.addView(title);
 
-        TextView subtitle = new TextView(this);
-        subtitle.setText("Bluetooth Music Overlay");
-        subtitle.setTextSize(16);
-        subtitle.setTextColor(0xFFB0BEC5);
-        subtitle.setGravity(Gravity.CENTER);
-        subtitle.setPadding(0, 0, 0, 30);
-        layout.addView(subtitle);
+        TextView tip = new TextView(this);
+        tip.setText("提示：如果没歌词，长按悬浮窗切换捕获模式");
+        tip.setTextColor(Color.GRAY);
+        tip.setGravity(Gravity.CENTER);
+        tip.setPadding(0, 10, 0, 30);
+        layout.addView(tip);
 
-        // --- Lock & Visibility Control ---
-        // Lock button (Pass-through)
         btnLock = new Button(this);
         updateLockButton();
-        LinearLayout.LayoutParams fullWidthParams = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, 140
-        );
-        fullWidthParams.setMargins(10, 0, 10, 20);
-        btnLock.setLayoutParams(fullWidthParams);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 150);
+        lp.setMargins(0, 10, 0, 20);
+        btnLock.setLayoutParams(lp);
         btnLock.setOnClickListener(v -> toggleLock());
         layout.addView(btnLock);
 
-        // Visibility button
         btnVisibility = new Button(this);
         updateVisibilityButton();
-        btnVisibility.setLayoutParams(fullWidthParams);
+        btnVisibility.setLayoutParams(lp);
         btnVisibility.setOnClickListener(v -> toggleVisibility());
         layout.addView(btnVisibility);
 
-        // --- Font Size Control Section ---
-        TextView sizeLabel = new TextView(this);
-        sizeLabel.setText("Text Size");
-        sizeLabel.setTextColor(Color.WHITE);
-        sizeLabel.setTextSize(18);
-        sizeLabel.setPadding(0, 20, 0, 10);
-        sizeLabel.setGravity(Gravity.CENTER);
-        layout.addView(sizeLabel);
+        TextView sl = new TextView(this);
+        sl.setText("歌词字号");
+        sl.setTextColor(Color.WHITE);
+        sl.setPadding(0, 30, 0, 10);
+        layout.addView(sl);
 
-        LinearLayout sizeControlLayout = new LinearLayout(this);
-        sizeControlLayout.setOrientation(LinearLayout.HORIZONTAL);
-        sizeControlLayout.setGravity(Gravity.CENTER);
-        sizeControlLayout.setPadding(0, 0, 0, 40);
+        LinearLayout sc = new LinearLayout(this);
+        sc.setOrientation(LinearLayout.HORIZONTAL);
+        sc.setGravity(Gravity.CENTER);
 
-        Button btnMinus = createSquareButton("-", 0xFF424242, v -> updateFontSize(-2));
-        Button btnPlus = createSquareButton("+", 0xFF424242, v -> updateFontSize(2));
-        
+        Button bm = createSquareButton("-", v -> updateFontSize(-2));
+        Button bp = createSquareButton("+", v -> updateFontSize(2));
         sizeDisplay = new TextView(this);
         sizeDisplay.setText(String.valueOf(currentTextSize));
         sizeDisplay.setTextColor(Color.WHITE);
         sizeDisplay.setTextSize(24);
-        sizeDisplay.setTypeface(null, Typeface.BOLD);
         sizeDisplay.setGravity(Gravity.CENTER);
-        sizeDisplay.setLayoutParams(new LinearLayout.LayoutParams(150, ViewGroup.LayoutParams.MATCH_PARENT));
+        sizeDisplay.setWidth(150);
 
-        sizeControlLayout.addView(btnMinus);
-        sizeControlLayout.addView(sizeDisplay);
-        sizeControlLayout.addView(btnPlus);
-        layout.addView(sizeControlLayout);
-        // ---------------------------------
+        sc.addView(bm);
+        sc.addView(sizeDisplay);
+        sc.addView(bp);
+        layout.addView(sc);
 
-        // Permissions
-        TextView instructions = new TextView(this);
-        instructions.setText("Required Permissions:");
-        instructions.setTextColor(Color.LTGRAY);
-        instructions.setTextSize(14);
-        instructions.setGravity(Gravity.CENTER);
-        instructions.setPadding(20, 0, 20, 10);
-        layout.addView(instructions);
-
-        layout.addView(createButton("1. ALLOW OVERLAY", 0xFF1565C0, v -> requestOverlayPermission()));
-        layout.addView(new View(this), new LinearLayout.LayoutParams(1, 20));
-        layout.addView(createButton("2. ALLOW MEDIA ACCESS", 0xFF1565C0, v -> requestNotificationAccess()));
+        layout.addView(createPermButton("1. 授予悬浮窗权限", v -> requestOverlayPermission()));
+        layout.addView(createPermButton("2. 授予通知抓取权限", v -> requestNotificationAccess()));
 
         scroll.addView(layout);
         setContentView(scroll);
@@ -135,119 +110,71 @@ public class MainActivity extends Activity {
         isLocked = !isLocked;
         prefs.edit().putBoolean("pref_is_locked", isLocked).apply();
         updateLockButton();
-        
-        Intent intent = new Intent(this, LyricsOverlayService.class);
-        intent.setAction("ACTION_UPDATE_LOCK_STATE");
-        intent.putExtra("locked", isLocked);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(intent);
-        } else {
-            startService(intent);
-        }
+        sendToService("ACTION_UPDATE_LOCK_STATE", "locked", isLocked);
     }
 
     private void toggleVisibility() {
         isVisible = !isVisible;
         prefs.edit().putBoolean("pref_is_visible", isVisible).apply();
         updateVisibilityButton();
-
-        Intent intent = new Intent(this, LyricsOverlayService.class);
-        intent.setAction("ACTION_UPDATE_VISIBILITY");
-        intent.putExtra("visible", isVisible);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(intent);
-        } else {
-            startService(intent);
-        }
-    }
-
-    private void updateLockButton() {
-        if (isLocked) {
-            btnLock.setText("UNLOCK TOUCH (Enable Move)");
-            btnLock.setBackgroundColor(0xFFFFA000); // Amber/Orange
-            btnLock.setTextColor(Color.BLACK);
-        } else {
-            btnLock.setText("LOCK TOUCH (Enable Pass-Through)");
-            btnLock.setBackgroundColor(0xFF0091EA); // Light Blue
-            btnLock.setTextColor(Color.WHITE);
-        }
-    }
-
-    private void updateVisibilityButton() {
-        if (isVisible) {
-            btnVisibility.setText("HIDE LYRICS");
-            btnVisibility.setBackgroundColor(0xFF546E7A); // Blue Grey
-        } else {
-            btnVisibility.setText("SHOW LYRICS");
-            btnVisibility.setBackgroundColor(0xFF78909C);
-        }
+        sendToService("ACTION_UPDATE_VISIBILITY", "visible", isVisible);
     }
 
     private void updateFontSize(int delta) {
-        currentTextSize += delta;
-        if (currentTextSize < 12) currentTextSize = 12;
-        if (currentTextSize > 90) currentTextSize = 90;
-
+        currentTextSize = Math.max(12, Math.min(90, currentTextSize + delta));
         sizeDisplay.setText(String.valueOf(currentTextSize));
-        
         prefs.edit().putInt("pref_font_size", currentTextSize).apply();
-
-        Intent intent = new Intent(this, LyricsOverlayService.class);
-        intent.setAction("ACTION_UPDATE_CONFIG");
-        intent.putExtra("font_size", currentTextSize);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(intent);
-        } else {
-            startService(intent);
-        }
+        sendToService("ACTION_UPDATE_CONFIG", "font_size", currentTextSize);
     }
 
-    private Button createButton(String text, int color, View.OnClickListener listener) {
-        Button btn = new Button(this);
-        btn.setText(text);
-        btn.setTextColor(Color.WHITE);
-        btn.setTextSize(16);
-        btn.setBackgroundColor(color);
-        btn.setPadding(30, 20, 30, 20);
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, 
-                120 
-        );
-        btn.setLayoutParams(params);
-        btn.setOnClickListener(listener);
-        return btn;
+    private void sendToService(String action, String key, Object value) {
+        Intent i = new Intent(this, LyricsOverlayService.class);
+        i.setAction(action);
+        if (value instanceof Boolean) i.putExtra(key, (Boolean) value);
+        else if (value instanceof Integer) i.putExtra(key, (Integer) value);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(i);
+        else startService(i);
     }
 
-    private Button createSquareButton(String text, int color, View.OnClickListener listener) {
-        Button btn = new Button(this);
-        btn.setText(text);
-        btn.setTextColor(Color.WHITE);
-        btn.setTextSize(24);
-        btn.setBackgroundColor(color);
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(120, 120);
-        btn.setLayoutParams(params);
-        btn.setOnClickListener(listener);
-        return btn;
+    private void updateLockButton() {
+        btnLock.setText(isLocked ? "已锁定 (穿透模式: 可点下层)" : "已解锁 (移动模式: 可拖动)");
+        btnLock.setBackgroundColor(isLocked ? 0xFF388E3C : 0xFF1976D2);
+        btnLock.setTextColor(Color.WHITE);
+    }
+
+    private void updateVisibilityButton() {
+        btnVisibility.setText(isVisible ? "隐藏悬浮窗" : "显示悬浮窗");
+        btnVisibility.setBackgroundColor(0xFF455A64);
+        btnVisibility.setTextColor(Color.WHITE);
+    }
+
+    private Button createSquareButton(String text, View.OnClickListener l) {
+        Button b = new Button(this);
+        b.setText(text);
+        b.setOnClickListener(l);
+        b.setLayoutParams(new LinearLayout.LayoutParams(140, 140));
+        return b;
+    }
+
+    private Button createPermButton(String text, View.OnClickListener l) {
+        Button b = new Button(this);
+        b.setText(text);
+        b.setOnClickListener(l);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 120);
+        lp.setMargins(0, 40, 0, 0);
+        b.setLayoutParams(lp);
+        return b;
     }
 
     private void requestOverlayPermission() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            if (!Settings.canDrawOverlays(this)) {
-                Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                        Uri.parse("package:" + getPackageName()));
-                startActivity(intent);
-            } else {
-                Toast.makeText(this, "Overlay Allowed", Toast.LENGTH_SHORT).show();
-            }
-        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
+            startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + getPackageName())));
+        } else Toast.makeText(this, "权限已获得", Toast.LENGTH_SHORT).show();
     }
 
     private void requestNotificationAccess() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP_MR1) {
-            Intent intent = new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS);
-            startActivity(intent);
-        } else {
-            Toast.makeText(this, "Not supported on this Android version", Toast.LENGTH_SHORT).show();
+            startActivity(new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS));
         }
     }
 }
