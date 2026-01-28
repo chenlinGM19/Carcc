@@ -47,18 +47,25 @@ public class MainActivity extends Activity {
         layout.setGravity(Gravity.CENTER_HORIZONTAL);
 
         TextView title = new TextView(this);
-        title.setText("CarLyrix 蓝牙修复版");
-        title.setTextSize(28);
+        title.setText("CarLyrix v4.0 极速版");
+        title.setTextSize(30);
         title.setTypeface(null, Typeface.BOLD);
         title.setTextColor(0xFF00E5FF);
         title.setGravity(Gravity.CENTER);
         layout.addView(title);
 
+        TextView subtitle = new TextView(this);
+        subtitle.setText("全协议兼容 · 蓝牙歌词助手");
+        subtitle.setTextColor(0xFF888888);
+        subtitle.setTextSize(14);
+        subtitle.setGravity(Gravity.CENTER);
+        layout.addView(subtitle);
+
         TextView tip = new TextView(this);
         tip.setText("提示：如果没歌词，长按悬浮窗切换捕获模式");
-        tip.setTextColor(Color.GRAY);
+        tip.setTextColor(Color.YELLOW);
         tip.setGravity(Gravity.CENTER);
-        tip.setPadding(0, 10, 0, 30);
+        tip.setPadding(0, 30, 0, 30);
         layout.addView(tip);
 
         btnLock = new Button(this);
@@ -76,9 +83,9 @@ public class MainActivity extends Activity {
         layout.addView(btnVisibility);
 
         TextView sl = new TextView(this);
-        sl.setText("歌词字号");
+        sl.setText("歌词字号调整");
         sl.setTextColor(Color.WHITE);
-        sl.setPadding(0, 30, 0, 10);
+        sl.setPadding(0, 40, 0, 10);
         layout.addView(sl);
 
         LinearLayout sc = new LinearLayout(this);
@@ -101,6 +108,14 @@ public class MainActivity extends Activity {
 
         layout.addView(createPermButton("1. 授予悬浮窗权限", v -> requestOverlayPermission()));
         layout.addView(createPermButton("2. 授予通知抓取权限", v -> requestNotificationAccess()));
+
+        TextView footer = new TextView(this);
+        footer.setText("Version 4.0.0 Stable\n针对 AVRCP 1.3/1.4/1.6 优化");
+        footer.setTextColor(0xFF555555);
+        footer.setTextSize(12);
+        footer.setGravity(Gravity.CENTER);
+        footer.setPadding(0, 60, 0, 20);
+        layout.addView(footer);
 
         scroll.addView(layout);
         setContentView(scroll);
@@ -132,12 +147,16 @@ public class MainActivity extends Activity {
         i.setAction(action);
         if (value instanceof Boolean) i.putExtra(key, (Boolean) value);
         else if (value instanceof Integer) i.putExtra(key, (Integer) value);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(i);
-        else startService(i);
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(i);
+            else startService(i);
+        } catch (Exception e) {
+            Log.e("CarLyrix", "Service Error: " + e.getMessage());
+        }
     }
 
     private void updateLockButton() {
-        btnLock.setText(isLocked ? "已锁定 (穿透模式: 可点下层)" : "已解锁 (移动模式: 可拖动)");
+        btnLock.setText(isLocked ? "已锁定 (穿透模式: 可点击地图)" : "已解锁 (移动模式: 可拖动)");
         btnLock.setBackgroundColor(isLocked ? 0xFF388E3C : 0xFF1976D2);
         btnLock.setTextColor(Color.WHITE);
     }
