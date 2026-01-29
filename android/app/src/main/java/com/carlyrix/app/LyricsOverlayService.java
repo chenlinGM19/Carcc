@@ -29,15 +29,16 @@ import android.view.WindowManager;
 import android.widget.TextView;
 
 import java.util.List;
+import java.util.Set;
 import java.util.regex.Pattern;
 
 /**
- * 深度兼容车机蓝牙协议的歌词服务
- * 针对 AVRCP 1.3+ 协议及旧款安卓系统设计
- * 核心逻辑：MediaSession 实时流 + 多源广播补偿 + AVRCP 扩展字段扫描 + 时间戳清洗
+ * CarLyrix v4.0 - 深度适配车机引擎
+ * 针对日志中出现的 Iflytek/FlyAudio/RemoteControl 组件进行深度字段扫描
  */
 public class LyricsOverlayService extends NotificationListenerService implements MediaSessionManager.OnActiveSessionsChangedListener {
 
+    private static final String TAG = "CarLyrix_Service";
     private WindowManager windowManager;
     private TextView lyricsView;
     private WindowManager.LayoutParams params;
@@ -45,9 +46,10 @@ public class LyricsOverlayService extends NotificationListenerService implements
     private MediaSessionManager mediaSessionManager;
 
     private MediaMetadata lastMetadata;
-    private String lastRawText = ""; 
+    private String lastCapturedLyrics = "";
+    private String lastCapturedTitle = "";
+    private String lastCapturedArtist = "";
     
-    // 正则表达式用于清洗时间戳，例如 [01:20.30] 或 [02:11]
     private final Pattern timestampPattern = Pattern.compile("\\[\\d{2,}:\\d{2,}(\\.\\d+)?\\]");
 
     private int currentFontSize = 34;
@@ -55,25 +57,21 @@ public class LyricsOverlayService extends NotificationListenerService implements
     private boolean isLocked = false;
     private boolean isVisible = true;
     
-    // 捕获模式
-    private static final int MODE_AUTO = 0;    // 智能识别 (优先找长字符串/带时间戳的)
-    private static final int MODE_TITLE = 1;   // 强制标题 (部分车机把歌词放标题)
-    private static final int MODE_DESC = 2;    // 强制描述 (AVRCP 1.6 歌词标准位)
-    private static final int MODE_RAW = 3;     // 原始数据 (不进行任何清洗)
+    private static final int MODE_AUTO = 0;
+    private static final int MODE_RAW = 1;
     private int captureMode = MODE_AUTO;
-    private final String[] MODE_NAMES = {"模式: 智能识别", "模式: 强制抓取标题", "模式: 强制抓取描述", "模式: 原始数据"};
+    private final String[] MODE_NAMES = {"模式: 智能识别", "模式: 原始数据"};
 
     private float startX, startY;
     private float initialTouchX, initialTouchY;
-    private long lastTapTime = 0;
     private boolean isDragging = false;
     private final Handler uiHandler = new Handler(Looper.getMainLooper());
     
     private final Runnable longPressRunnable = this::cycleCaptureMode;
     private final Runnable revertMessageRunnable = this::restoreCurrentLyrics;
 
-    private BroadcastReceiver legacyReceiver;
-    private static final String CHANNEL_ID = "carlyrix_v2_channel";
+    private BroadcastReceiver carExtraReceiver;
+    private static final String CHANNEL_ID = "carlyrix_v4_channel";
 
     private final MediaController.Callback mediaCallback = new MediaController.Callback() {
         @Override
@@ -103,166 +101,122 @@ public class LyricsOverlayService extends NotificationListenerService implements
             mediaSessionManager = (MediaSessionManager) getSystemService(Context.MEDIA_SESSION_SERVICE);
         }
         
-        registerLegacyReceiver();
+        registerCarSpecificReceivers();
     }
 
     private void startForegroundServiceNotification() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationChannel channel = new NotificationChannel(CHANNEL_ID, "CarLyrix Core", NotificationManager.IMPORTANCE_LOW);
+            NotificationChannel channel = new NotificationChannel(CHANNEL_ID, "CarLyrix Engine", NotificationManager.IMPORTANCE_LOW);
             getSystemService(NotificationManager.class).createNotificationChannel(channel);
             Notification notification = new Notification.Builder(this, CHANNEL_ID)
-                    .setContentTitle("CarLyrix 歌词引擎已就绪")
-                    .setContentText("正在监测蓝牙数据流...")
+                    .setContentTitle("CarLyrix 4.0 运行中")
+                    .setContentText("正在深度监测车机蓝牙流...")
                     .setSmallIcon(android.R.drawable.ic_media_play).build();
             startForeground(1, notification);
         }
     }
 
-    @Override
-    public int onStartCommand(Intent intent, int flags, int startId) {
-        if (intent != null) {
-            String action = intent.getAction();
-            if ("ACTION_UPDATE_CONFIG".equals(action)) {
-                currentFontSize = intent.getIntExtra("font_size", currentFontSize);
-                applyStyle();
-            } else if ("ACTION_UPDATE_LOCK_STATE".equals(action)) {
-                setLockState(intent.getBooleanExtra("locked", false));
-            } else if ("ACTION_UPDATE_VISIBILITY".equals(action)) {
-                setVisibilityState(intent.getBooleanExtra("visible", true));
-            }
-        }
-        return START_STICKY; 
-    }
-
-    private void setLockState(boolean locked) {
-        this.isLocked = locked;
-        if (lyricsView == null) return;
-        if (isLocked) params.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
-        else params.flags &= ~WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
-        showTemporaryMessage(isLocked ? "已锁定 (触摸穿透)" : "已解锁 (可移动)");
-        windowManager.updateViewLayout(lyricsView, params);
-    }
-
-    private void setVisibilityState(boolean visible) {
-        this.isVisible = visible;
-        if (lyricsView != null) lyricsView.setVisibility(visible ? View.VISIBLE : View.GONE);
-    }
-
-    @Override
-    public void onListenerConnected() {
-        super.onListenerConnected();
-        scanForActiveSessions();
-    }
-
-    private void scanForActiveSessions() {
-        if (mediaSessionManager == null) return;
-        try {
-            ComponentName cn = new ComponentName(this, LyricsOverlayService.class);
-            mediaSessionManager.addOnActiveSessionsChangedListener(this, cn);
-            processControllers(mediaSessionManager.getActiveSessions(cn));
-        } catch (Exception e) {
-            Log.e("CarLyrix", "MediaSession Error: " + e.getMessage());
-        }
-    }
-
-    @Override
-    public void onActiveSessionsChanged(List<MediaController> controllers) {
-        processControllers(controllers);
-    }
-
-    private void processControllers(List<MediaController> controllers) {
-        if (controllers == null || controllers.isEmpty()) return;
-        MediaController target = controllers.get(0);
-        for (MediaController mc : controllers) {
-            if (mc.getPlaybackState() != null && mc.getPlaybackState().getState() == PlaybackState.STATE_PLAYING) {
-                target = mc; break;
-            }
-        }
-        if (currentController != null) currentController.unregisterCallback(mediaCallback);
-        currentController = target;
-        currentController.registerCallback(mediaCallback);
-        updateMetadata(currentController.getMetadata());
-    }
-
-    private void registerLegacyReceiver() {
-        legacyReceiver = new BroadcastReceiver() {
+    /**
+     * 核心改进：针对日志中出现的 Iflytek, FlyAudio 等组件进行全协议监听
+     */
+    private void registerCarSpecificReceivers() {
+        carExtraReceiver = new BroadcastReceiver() {
             @Override
             public void onReceive(Context context, Intent intent) {
                 Bundle bundle = intent.getExtras();
                 if (bundle == null) return;
 
-                String track = bundle.getString("track");
-                String artist = bundle.getString("artist");
-                String lyrics = bundle.getString("lyrics"); 
-                
-                if (lyrics != null) {
-                    lastRawText = lyrics;
-                } else if (track != null) {
-                    lastRawText = track + (artist != null ? "\n" + artist : "");
-                }
+                // 深度扫描 Bundle 中所有字段 (针对日志中的 mediaTitle, artistName, mLyruc 等)
+                deepScanBundle(bundle);
                 
                 if (currentController == null) {
-                    updateOverlayText(captureMode == MODE_RAW ? lastRawText : cleanText(lastRawText));
+                    refreshDisplay();
                 }
             }
         };
-        IntentFilter f = new IntentFilter();
-        f.addAction("com.android.music.metachanged");
-        f.addAction("com.android.music.playstatechanged");
-        f.addAction("com.spotify.music.metadatachanged");
-        f.addAction("com.htc.music.metachanged");
-        f.addAction("com.miui.player.metachanged");
-        f.addAction("com.samsung.sec.android.MusicPlayer.metachanged");
-        f.addAction("android.bluetooth.a2dp-sink.profile.action.PLAYING_STATE_CHANGED");
-        registerReceiver(legacyReceiver, f);
+
+        IntentFilter filter = new IntentFilter();
+        // 标准协议
+        filter.addAction("com.android.music.metachanged");
+        filter.addAction("android.bluetooth.a2dp-sink.profile.action.PLAYING_STATE_CHANGED");
+        
+        // 日志中体现的讯飞/飞歌车机组件常见广播
+        filter.addAction("com.iflytek.music.metachanged");
+        filter.addAction("com.iflytek.xiri.action.MUSIC_METADATA_UPDATE");
+        filter.addAction("com.flyaudio.music.metachanged");
+        filter.addAction("com.syu.music.metachanged");
+        filter.addAction("cn.colink.music.metachanged");
+        filter.addAction("com.mxnav.music.metachanged");
+        filter.addAction("com.remote.control.metadata"); // 对应日志中的 RemoteControl
+        
+        registerReceiver(carExtraReceiver, filter);
+    }
+
+    /**
+     * 深度扫描引擎：模糊匹配日志中可能出现的任何字段名
+     */
+    private void deepScanBundle(Bundle bundle) {
+        Set<String> keys = bundle.keySet();
+        for (String key : keys) {
+            Object value = bundle.get(key);
+            if (value == null) continue;
+            String valStr = value.toString();
+            String lowerKey = key.toLowerCase();
+
+            // 抓取歌词类字段 (包含日志中的 mLyruc 异常拼写)
+            if (lowerKey.contains("lyric") || lowerKey.contains("lrc") || lowerKey.contains("lyruc")) {
+                if (valStr.length() > 2) lastCapturedLyrics = valStr;
+            } 
+            // 抓取标题类字段 (包含日志中的 mediaTitle, musicname)
+            else if (lowerKey.contains("title") || lowerKey.contains("track") || lowerKey.contains("musicname")) {
+                lastCapturedTitle = valStr;
+            }
+            // 抓取歌手类字段 (包含日志中的 artistname, singer)
+            else if (lowerKey.contains("artist") || lowerKey.contains("singer")) {
+                lastCapturedArtist = valStr;
+            }
+        }
+    }
+
+    private void refreshDisplay() {
+        String display;
+        if (captureMode == MODE_RAW) {
+            display = !lastCapturedLyrics.isEmpty() ? lastCapturedLyrics : (lastCapturedTitle + "\n" + lastCapturedArtist);
+        } else {
+            String cleanLrc = cleanText(lastCapturedLyrics);
+            if (!cleanLrc.isEmpty()) {
+                display = cleanLrc;
+            } else {
+                display = lastCapturedTitle + (lastCapturedArtist.isEmpty() ? "" : "\n" + lastCapturedArtist);
+            }
+        }
+        updateOverlayText(display);
     }
 
     private void updateMetadata(MediaMetadata metadata) {
         if (metadata == null) return;
         lastMetadata = metadata;
-        uiHandler.removeCallbacks(revertMessageRunnable);
-
-        String title = metadata.getString(MediaMetadata.METADATA_KEY_TITLE);
-        String artist = metadata.getString(MediaMetadata.METADATA_KEY_ARTIST);
-        String desc = metadata.getString(MediaMetadata.METADATA_KEY_DISPLAY_DESCRIPTION);
-        String dTitle = metadata.getString(MediaMetadata.METADATA_KEY_DISPLAY_TITLE);
-
-        String result = "";
-        switch (captureMode) {
-            case MODE_AUTO:
-                if (isLookLikeLyrics(desc)) result = desc;
-                else if (isLookLikeLyrics(title)) result = title;
-                else if (desc != null) result = desc;
-                else if (dTitle != null) result = dTitle;
-                else result = (title != null ? title : "") + (artist != null ? "\n"+artist : "");
-                break;
-            case MODE_TITLE: result = title != null ? title : ""; break;
-            case MODE_DESC: result = desc != null ? desc : ""; break;
-            case MODE_RAW: result = desc != null ? desc : (title != null ? title : ""); break;
-        }
         
-        if (result.isEmpty()) result = lastRawText;
-        updateOverlayText(captureMode == MODE_RAW ? result : cleanText(result));
-    }
+        // 尝试从标准 MediaMetadata 抓取，如果失败则保留深度扫描的数据
+        String title = metadata.getString(MediaMetadata.METADATA_KEY_TITLE);
+        String desc = metadata.getString(MediaMetadata.METADATA_KEY_DISPLAY_DESCRIPTION);
+        
+        if (title != null) lastCapturedTitle = title;
+        if (desc != null && desc.length() > 5) lastCapturedLyrics = desc;
 
-    private boolean isLookLikeLyrics(String text) {
-        if (text == null) return false;
-        // 包含时间戳或者长度较长通常是歌词
-        return timestampPattern.matcher(text).find() || text.length() > 30;
+        refreshDisplay();
     }
 
     private String cleanText(String text) {
-        if (text == null) return "";
-        // 移除 [01:22.10] 格式的时间戳
-        String cleaned = timestampPattern.matcher(text).replaceAll("");
-        return cleaned.trim();
+        if (text == null || text.equals("null")) return "";
+        return timestampPattern.matcher(text).replaceAll("").trim();
     }
 
     private void createOverlay() {
         windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
         lyricsView = new TextView(this);
         applyStyle();
-        lyricsView.setText("CarLyrix: 等待蓝牙数据...");
+        lyricsView.setText("CarLyrix 4.0: 扫描车机信号...");
         lyricsView.setShadowLayer(8, 0, 0, Color.BLACK);
         lyricsView.setTypeface(null, android.graphics.Typeface.BOLD);
         lyricsView.setGravity(Gravity.CENTER);
@@ -287,6 +241,7 @@ public class LyricsOverlayService extends NotificationListenerService implements
 
     private void setupTouchListener() {
         lyricsView.setOnTouchListener(new View.OnTouchListener() {
+            private long lastTapTime = 0;
             @Override
             public boolean onTouch(View v, MotionEvent event) {
                 if (isLocked) return false;
@@ -357,14 +312,71 @@ public class LyricsOverlayService extends NotificationListenerService implements
     }
 
     private void restoreCurrentLyrics() {
-        if (lastMetadata != null) updateMetadata(lastMetadata);
-        else if (!lastRawText.isEmpty()) updateOverlayText(cleanText(lastRawText));
+        refreshDisplay();
+    }
+
+    @Override
+    public int onStartCommand(Intent intent, int flags, int startId) {
+        if (intent != null) {
+            String action = intent.getAction();
+            if ("ACTION_UPDATE_CONFIG".equals(action)) {
+                currentFontSize = intent.getIntExtra("font_size", currentFontSize);
+                applyStyle();
+            } else if ("ACTION_UPDATE_LOCK_STATE".equals(action)) {
+                isLocked = intent.getBooleanExtra("locked", false);
+                if (lyricsView != null) {
+                    if (isLocked) params.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+                    else params.flags &= ~WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+                    windowManager.updateViewLayout(lyricsView, params);
+                }
+            } else if ("ACTION_UPDATE_VISIBILITY".equals(action)) {
+                isVisible = intent.getBooleanExtra("visible", true);
+                if (lyricsView != null) lyricsView.setVisibility(isVisible ? View.VISIBLE : View.GONE);
+            }
+        }
+        return START_STICKY;
+    }
+
+    @Override
+    public void onListenerConnected() {
+        super.onListenerConnected();
+        scanForActiveSessions();
+    }
+
+    private void scanForActiveSessions() {
+        if (mediaSessionManager == null) return;
+        try {
+            ComponentName cn = new ComponentName(this, LyricsOverlayService.class);
+            mediaSessionManager.addOnActiveSessionsChangedListener(this, cn);
+            processControllers(mediaSessionManager.getActiveSessions(cn));
+        } catch (Exception e) {
+            Log.e(TAG, "MediaSession Error: " + e.getMessage());
+        }
+    }
+
+    @Override
+    public void onActiveSessionsChanged(List<MediaController> controllers) {
+        processControllers(controllers);
+    }
+
+    private void processControllers(List<MediaController> controllers) {
+        if (controllers == null || controllers.isEmpty()) return;
+        MediaController target = controllers.get(0);
+        for (MediaController mc : controllers) {
+            if (mc.getPlaybackState() != null && mc.getPlaybackState().getState() == PlaybackState.STATE_PLAYING) {
+                target = mc; break;
+            }
+        }
+        if (currentController != null) currentController.unregisterCallback(mediaCallback);
+        currentController = target;
+        currentController.registerCallback(mediaCallback);
+        updateMetadata(currentController.getMetadata());
     }
 
     @Override
     public void onDestroy() {
         super.onDestroy();
-        if (legacyReceiver != null) try { unregisterReceiver(legacyReceiver); } catch (Exception e) {}
+        if (carExtraReceiver != null) try { unregisterReceiver(carExtraReceiver); } catch (Exception e) {}
         if (windowManager != null && lyricsView != null) windowManager.removeView(lyricsView);
     }
 }
