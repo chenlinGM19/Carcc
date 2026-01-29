@@ -1,5 +1,0 @@
-{
-  "name": "CarFloatingLyrics",
-  "description": "A native Android application designed for Android 9+ Car Head Units. It provides a floating, draggable, and resizable overlay window to display music lyrics (simulated based on logcat data) over any app, including navigation.",
-  "requestFramePermissions": []
-}
