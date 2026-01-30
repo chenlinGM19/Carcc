@@ -9,6 +9,7 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.pm.ServiceInfo;
 import android.graphics.Color;
@@ -44,10 +45,12 @@ public class FloatingLyricService extends Service {
     
     // New Actions
     public static final String ACTION_UPDATE_STYLE = "com.example.carfloatinglyrics.UPDATE_STYLE";
-    public static final String ACTION_UPDATE_OPACITY = "com.example.carfloatinglyrics.UPDATE_OPACITY";
+    public static final String ACTION_UPDATE_BG_OPACITY = "com.example.carfloatinglyrics.UPDATE_BG_OPACITY";
+    public static final String ACTION_UPDATE_TEXT_OPACITY = "com.example.carfloatinglyrics.UPDATE_TEXT_OPACITY";
     public static final String ACTION_TOGGLE_CLICK_THROUGH = "com.example.carfloatinglyrics.TOGGLE_CLICK_THROUGH";
     
     public static final String EXTRA_MODE_LOGCAT = "mode_logcat";
+    private static final String PREFS_NAME = "CarLyricsPrefs";
 
     private WindowManager mWindowManager;
     private View mFloatingView;
@@ -55,12 +58,17 @@ public class FloatingLyricService extends Service {
     private TextView mLyricText;
     private ImageView mIcon;
     private WindowManager.LayoutParams params;
+    private SharedPreferences prefs;
     
     // State
     private boolean isLocked = false;
     private boolean isViewAdded = false;
     private boolean isClickThrough = false;
-    private int currentOpacity = 255; // 0-255
+    
+    // Independent Opacity States
+    private int currentBgAlpha = 255; // 0-255
+    private float currentTextAlpha = 1.0f; // 0.0 - 1.0
+    private int currentStyleId = 0;
     
     private LyricUpdateReceiver lyricReceiver;
     private boolean isReceiverRegistered = false;
@@ -77,6 +85,7 @@ public class FloatingLyricService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
+        prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
         startMyForeground();
 
         try {
@@ -100,8 +109,10 @@ public class FloatingLyricService extends Service {
                     PixelFormat.TRANSLUCENT);
 
             params.gravity = Gravity.TOP | Gravity.START;
-            params.x = 100;
-            params.y = 100;
+            
+            // Load saved position
+            params.x = prefs.getInt("win_x", 100);
+            params.y = prefs.getInt("win_y", 100);
 
             mWindowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
 
@@ -111,12 +122,39 @@ public class FloatingLyricService extends Service {
                 if (mWindowManager != null) {
                     mWindowManager.addView(mFloatingView, params);
                     isViewAdded = true;
+                    
+                    // Initialize States from Prefs
+                    initServiceState();
+                    
                     setupTouchListener();
                 }
             }
         } catch (Exception e) {
             e.printStackTrace();
         }
+    }
+    
+    private void initServiceState() {
+        // Size
+        int size = prefs.getInt("size", 18);
+        mLyricText.setTextSize(size);
+
+        // Lock & ClickThrough
+        isLocked = prefs.getBoolean("locked", false);
+        boolean clickThrough = prefs.getBoolean("click_through", false);
+        updateClickThrough(clickThrough);
+
+        // Visibility
+        boolean visible = prefs.getBoolean("visible", true);
+        mFloatingView.setVisibility(visible ? View.VISIBLE : View.GONE);
+
+        // Style & Opacity
+        currentStyleId = prefs.getInt("style_id", 0);
+        currentBgAlpha = (int) (prefs.getInt("bg_opacity", 100) * 2.55);
+        currentTextAlpha = prefs.getInt("text_opacity", 100) / 100.0f;
+        
+        // Apply Style (this also applies opacity)
+        updateStyle(currentStyleId);
     }
 
     private void setupTouchListener() {
@@ -140,6 +178,13 @@ public class FloatingLyricService extends Service {
                         return true;
 
                     case MotionEvent.ACTION_UP:
+                        // Save position
+                        if (isViewAdded) {
+                            prefs.edit()
+                                .putInt("win_x", params.x)
+                                .putInt("win_y", params.y)
+                                .apply();
+                        }
                         return true;
 
                     case MotionEvent.ACTION_MOVE:
@@ -182,19 +227,30 @@ public class FloatingLyricService extends Service {
                         int size = intent.getIntExtra("size", 18);
                         if (isViewAdded && mLyricText != null) {
                             mLyricText.setTextSize(size);
+                            // Ensure the window resizes to wrap the content
+                            if (mWindowManager != null) {
+                                mWindowManager.updateViewLayout(mFloatingView, params);
+                            }
                         }
                         break;
                         
                     case ACTION_UPDATE_STYLE:
-                        int styleId = intent.getIntExtra("style_id", 0);
-                        updateStyle(styleId);
+                        currentStyleId = intent.getIntExtra("style_id", 0);
+                        updateStyle(currentStyleId);
                         break;
 
-                    case ACTION_UPDATE_OPACITY:
-                        // Seekbar is 0-100, Alpha is 0-255
-                        int progress = intent.getIntExtra("opacity", 100);
-                        currentOpacity = (int) (progress * 2.55);
+                    case ACTION_UPDATE_BG_OPACITY:
+                        // Seekbar 0-100 -> Alpha 0-255
+                        int bgProgress = intent.getIntExtra("opacity", 100);
+                        currentBgAlpha = (int) (bgProgress * 2.55);
                         updateBackgroundOpacity();
+                        break;
+
+                    case ACTION_UPDATE_TEXT_OPACITY:
+                        // Seekbar 0-100 -> Alpha 0.0-1.0
+                        int textProgress = intent.getIntExtra("opacity", 100);
+                        currentTextAlpha = textProgress / 100.0f;
+                        updateTextOpacity();
                         break;
 
                     case ACTION_TOGGLE_CLICK_THROUGH:
@@ -228,7 +284,16 @@ public class FloatingLyricService extends Service {
 
     private void updateBackgroundOpacity() {
         if (mRootContainer != null && mRootContainer.getBackground() != null) {
-            mRootContainer.getBackground().setAlpha(currentOpacity);
+            mRootContainer.getBackground().setAlpha(currentBgAlpha);
+        }
+    }
+
+    private void updateTextOpacity() {
+        if (mLyricText != null) {
+            mLyricText.setAlpha(currentTextAlpha);
+        }
+        if (mIcon != null) {
+            mIcon.setAlpha(currentTextAlpha);
         }
     }
 
@@ -283,8 +348,14 @@ public class FloatingLyricService extends Service {
                 break;
         }
         
-        // Re-apply opacity to the new background
+        // IMPORTANT: Re-apply user preferred opacities after style change (which resets drawables)
         updateBackgroundOpacity();
+        updateTextOpacity();
+        
+        // Ensure layout updates
+        if (mWindowManager != null) {
+            mWindowManager.updateViewLayout(mFloatingView, params);
+        }
     }
 
     private void switchCaptureMode(boolean useLogcat) {
@@ -364,6 +435,12 @@ public class FloatingLyricService extends Service {
         uiHandler.post(() -> {
             if (isViewAdded && mLyricText != null) {
                 mLyricText.setText(text);
+                // Force window manager to recalculate width if needed
+                if (mWindowManager != null) {
+                    try {
+                        mWindowManager.updateViewLayout(mFloatingView, params);
+                    } catch (Exception e) { e.printStackTrace(); }
+                }
             }
         });
     }

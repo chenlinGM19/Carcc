@@ -70,7 +70,8 @@
         app:layout_constraintStart_toEndOf="@+id/switchShowLyrics"
         app:layout_constraintTop_toTopOf="@+id/switchShowLyrics" />
 
-    <!-- Size & Opacity Row -->
+    <!-- Size & Opacity Controls -->
+    <!-- Size -->
     <TextView
         android:id="@+id/tvSizeLabel"
         android:layout_width="wrap_content"
@@ -85,7 +86,7 @@
         android:id="@+id/seekBarSize"
         android:layout_width="150dp"
         android:layout_height="wrap_content"
-        android:max="40"
+        android:max="200"
         android:progress="18"
         android:min="10"
         app:layout_constraintStart_toEndOf="@+id/tvSizeLabel"
@@ -93,23 +94,46 @@
         app:layout_constraintBottom_toBottomOf="@+id/tvSizeLabel"
         android:layout_marginStart="8dp"/>
 
+    <!-- Text Opacity -->
     <TextView
-        android:id="@+id/tvOpacityLabel"
+        android:id="@+id/tvTextOpacityLabel"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="Opacity"
+        android:text="Text Opacity"
         android:textColor="#CCCCCC"
         android:layout_marginStart="16dp"
         app:layout_constraintStart_toEndOf="@+id/seekBarSize"
         app:layout_constraintTop_toTopOf="@+id/tvSizeLabel" />
 
     <SeekBar
-        android:id="@+id/seekBarOpacity"
-        android:layout_width="150dp"
+        android:id="@+id/seekBarTextOpacity"
+        android:layout_width="120dp"
         android:layout_height="wrap_content"
         android:max="100"
         android:progress="100"
-        app:layout_constraintStart_toEndOf="@+id/tvOpacityLabel"
+        app:layout_constraintStart_toEndOf="@+id/tvTextOpacityLabel"
+        app:layout_constraintTop_toTopOf="@+id/tvSizeLabel"
+        app:layout_constraintBottom_toBottomOf="@+id/tvSizeLabel"
+        android:layout_marginStart="8dp"/>
+
+    <!-- BG Opacity -->
+    <TextView
+        android:id="@+id/tvBgOpacityLabel"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="BG Opacity"
+        android:textColor="#CCCCCC"
+        android:layout_marginStart="16dp"
+        app:layout_constraintStart_toEndOf="@+id/seekBarTextOpacity"
+        app:layout_constraintTop_toTopOf="@+id/tvSizeLabel" />
+
+    <SeekBar
+        android:id="@+id/seekBarBgOpacity"
+        android:layout_width="120dp"
+        android:layout_height="wrap_content"
+        android:max="100"
+        android:progress="100"
+        app:layout_constraintStart_toEndOf="@+id/tvBgOpacityLabel"
         app:layout_constraintTop_toTopOf="@+id/tvSizeLabel"
         app:layout_constraintBottom_toBottomOf="@+id/tvSizeLabel"
         android:layout_marginStart="8dp"/>

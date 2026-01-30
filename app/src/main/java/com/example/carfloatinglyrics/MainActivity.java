@@ -5,6 +5,7 @@ import android.content.ClipboardManager;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Build;
@@ -26,15 +27,22 @@ import androidx.appcompat.app.AppCompatActivity;
 public class MainActivity extends AppCompatActivity {
 
     private static final int CODE_DRAW_OVER_OTHER_APP_PERMISSION = 2084;
+    private static final String PREFS_NAME = "CarLyricsPrefs";
+    
     private TextView tvStatus;
     private RadioGroup rgMode;
     private TextView tvAdbCommand;
     private Button btnCopyCommand;
+    
+    private SharedPreferences prefs;
+    private boolean isRestoring = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+        
+        prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
 
         tvStatus = findViewById(R.id.tvStatus);
         tvAdbCommand = findViewById(R.id.tvAdbCommand);
@@ -46,8 +54,11 @@ public class MainActivity extends AppCompatActivity {
         Switch switchLock = findViewById(R.id.switchLockPosition);
         Switch switchShow = findViewById(R.id.switchShowLyrics);
         Switch switchClickThrough = findViewById(R.id.switchClickThrough);
+        
         SeekBar seekBarSize = findViewById(R.id.seekBarSize);
-        SeekBar seekBarOpacity = findViewById(R.id.seekBarOpacity);
+        SeekBar seekBarTextOpacity = findViewById(R.id.seekBarTextOpacity);
+        SeekBar seekBarBgOpacity = findViewById(R.id.seekBarBgOpacity);
+        
         Spinner spinnerStyle = findViewById(R.id.spinnerStyle);
 
         // --- Style Spinner Setup ---
@@ -68,7 +79,11 @@ public class MainActivity extends AppCompatActivity {
                 if(parent.getChildAt(0) != null) {
                     ((TextView) parent.getChildAt(0)).setTextColor(0xFFFFFFFF);
                 }
-                sendCommandToService(FloatingLyricService.ACTION_UPDATE_STYLE, "style_id", position);
+                
+                if (!isRestoring) {
+                    prefs.edit().putInt("style_id", position).apply();
+                    sendCommandToService(FloatingLyricService.ACTION_UPDATE_STYLE, "style_id", position);
+                }
             }
             @Override
             public void onNothingSelected(AdapterView<?> parent) {}
@@ -77,7 +92,12 @@ public class MainActivity extends AppCompatActivity {
         // --- Listeners ---
 
         rgMode.setOnCheckedChangeListener((group, checkedId) -> {
-            if (checkedId == R.id.rbLogcat) {
+            boolean isLogcat = (checkedId == R.id.rbLogcat);
+            if (!isRestoring) {
+                prefs.edit().putInt("mode", isLogcat ? 1 : 0).apply();
+            }
+
+            if (isLogcat) {
                 if (checkSelfPermission(android.Manifest.permission.READ_LOGS) != PackageManager.PERMISSION_GRANTED) {
                     tvAdbCommand.setVisibility(View.VISIBLE);
                     btnCopyCommand.setVisibility(View.VISIBLE);
@@ -131,40 +151,90 @@ public class MainActivity extends AppCompatActivity {
         });
 
         switchLock.setOnCheckedChangeListener((buttonView, isChecked) -> {
-            sendCommandToService(FloatingLyricService.ACTION_TOGGLE_LOCK, "locked", isChecked);
+            if (!isRestoring) {
+                prefs.edit().putBoolean("locked", isChecked).apply();
+                sendCommandToService(FloatingLyricService.ACTION_TOGGLE_LOCK, "locked", isChecked);
+            }
         });
 
         switchShow.setOnCheckedChangeListener((buttonView, isChecked) -> {
-            sendCommandToService(FloatingLyricService.ACTION_TOGGLE_VISIBILITY, "visible", isChecked);
+            if (!isRestoring) {
+                prefs.edit().putBoolean("visible", isChecked).apply();
+                sendCommandToService(FloatingLyricService.ACTION_TOGGLE_VISIBILITY, "visible", isChecked);
+            }
         });
 
         switchClickThrough.setOnCheckedChangeListener((buttonView, isChecked) -> {
-            // Note: Enabling Click-Through usually implies Locking position too
             if (isChecked) {
                 switchLock.setChecked(true);
             }
-            sendCommandToService(FloatingLyricService.ACTION_TOGGLE_CLICK_THROUGH, "click_through", isChecked);
+            if (!isRestoring) {
+                prefs.edit().putBoolean("click_through", isChecked).apply();
+                sendCommandToService(FloatingLyricService.ACTION_TOGGLE_CLICK_THROUGH, "click_through", isChecked);
+            }
         });
 
         seekBarSize.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
             public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                sendCommandToService(FloatingLyricService.ACTION_UPDATE_SIZE, "size", progress);
+                if (!isRestoring) {
+                    prefs.edit().putInt("size", progress).apply();
+                    sendCommandToService(FloatingLyricService.ACTION_UPDATE_SIZE, "size", progress);
+                }
             }
             @Override public void onStartTrackingTouch(SeekBar seekBar) {}
             @Override public void onStopTrackingTouch(SeekBar seekBar) {}
         });
 
-        seekBarOpacity.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+        seekBarTextOpacity.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
             public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                sendCommandToService(FloatingLyricService.ACTION_UPDATE_OPACITY, "opacity", progress);
+                if (!isRestoring) {
+                    prefs.edit().putInt("text_opacity", progress).apply();
+                    sendCommandToService(FloatingLyricService.ACTION_UPDATE_TEXT_OPACITY, "opacity", progress);
+                }
+            }
+            @Override public void onStartTrackingTouch(SeekBar seekBar) {}
+            @Override public void onStopTrackingTouch(SeekBar seekBar) {}
+        });
+
+        seekBarBgOpacity.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                if (!isRestoring) {
+                    prefs.edit().putInt("bg_opacity", progress).apply();
+                    sendCommandToService(FloatingLyricService.ACTION_UPDATE_BG_OPACITY, "opacity", progress);
+                }
             }
             @Override public void onStartTrackingTouch(SeekBar seekBar) {}
             @Override public void onStopTrackingTouch(SeekBar seekBar) {}
         });
         
-        // Initial permission check
+        // Restore State
+        restoreState(switchLock, switchShow, switchClickThrough, seekBarSize, seekBarTextOpacity, seekBarBgOpacity, spinnerStyle);
+    }
+
+    private void restoreState(Switch sLock, Switch sShow, Switch sClick, SeekBar sbSize, SeekBar sbTextOp, SeekBar sbBgOp, Spinner spinStyle) {
+        isRestoring = true;
+
+        sLock.setChecked(prefs.getBoolean("locked", false));
+        sShow.setChecked(prefs.getBoolean("visible", true));
+        sClick.setChecked(prefs.getBoolean("click_through", false));
+        sbSize.setProgress(prefs.getInt("size", 18));
+        sbTextOp.setProgress(prefs.getInt("text_opacity", 100));
+        sbBgOp.setProgress(prefs.getInt("bg_opacity", 100));
+        spinStyle.setSelection(prefs.getInt("style_id", 0));
+        
+        int mode = prefs.getInt("mode", 0);
+        if (mode == 1) {
+            rgMode.check(R.id.rbLogcat);
+        } else {
+            rgMode.check(R.id.rbNotification);
+        }
+
+        isRestoring = false;
+
+        // Check permission after restore
         if (rgMode.getCheckedRadioButtonId() == R.id.rbLogcat && 
             checkSelfPermission(android.Manifest.permission.READ_LOGS) != PackageManager.PERMISSION_GRANTED) {
             tvAdbCommand.setVisibility(View.VISIBLE);
@@ -192,6 +262,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void sendCommandToService(String action, String extraKey, boolean value) {
+        if (isRestoring) return;
         Intent intent = new Intent(this, FloatingLyricService.class);
         intent.setAction(action);
         intent.putExtra(extraKey, value);
@@ -199,6 +270,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void sendCommandToService(String action, String extraKey, int value) {
+        if (isRestoring) return;
         Intent intent = new Intent(this, FloatingLyricService.class);
         intent.setAction(action);
         intent.putExtra(extraKey, value);
