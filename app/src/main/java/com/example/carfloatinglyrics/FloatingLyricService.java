@@ -169,7 +169,7 @@ public class FloatingLyricService extends Service {
         Notification notification = new NotificationCompat.Builder(this, channelId)
                 .setContentTitle("Car Floating Lyrics")
                 .setContentText("Lyrics overlay is active")
-                .setSmallIcon(R.mipmap.ic_launcher)
+                .setSmallIcon(R.drawable.ic_launcher)
                 .setContentIntent(pendingIntent)
                 .build();
 
