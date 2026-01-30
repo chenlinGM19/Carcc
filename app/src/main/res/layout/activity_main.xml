@@ -37,13 +37,14 @@
         app:layout_constraintStart_toEndOf="@+id/btnStartService"
         app:layout_constraintTop_toTopOf="@+id/btnStartService" />
 
+    <!-- Switches Row 1 -->
     <Switch
         android:id="@+id/switchLockPosition"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:text="Lock Position"
         android:textColor="#FFFFFF"
-        android:layout_marginTop="24dp"
+        android:layout_marginTop="16dp"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toBottomOf="@+id/btnStartService" />
 
@@ -58,19 +59,31 @@
         app:layout_constraintStart_toEndOf="@+id/switchLockPosition"
         app:layout_constraintTop_toTopOf="@+id/switchLockPosition" />
 
+    <Switch
+        android:id="@+id/switchClickThrough"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Click-Through"
+        android:checked="false"
+        android:textColor="#FFEB3B"
+        android:layout_marginStart="24dp"
+        app:layout_constraintStart_toEndOf="@+id/switchShowLyrics"
+        app:layout_constraintTop_toTopOf="@+id/switchShowLyrics" />
+
+    <!-- Size & Opacity Row -->
     <TextView
         android:id="@+id/tvSizeLabel"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="Text Size"
+        android:text="Size"
         android:textColor="#CCCCCC"
-        android:layout_marginTop="24dp"
+        android:layout_marginTop="16dp"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toBottomOf="@+id/switchLockPosition" />
 
     <SeekBar
         android:id="@+id/seekBarSize"
-        android:layout_width="300dp"
+        android:layout_width="150dp"
         android:layout_height="wrap_content"
         android:max="40"
         android:progress="18"
@@ -78,7 +91,120 @@
         app:layout_constraintStart_toEndOf="@+id/tvSizeLabel"
         app:layout_constraintTop_toTopOf="@+id/tvSizeLabel"
         app:layout_constraintBottom_toBottomOf="@+id/tvSizeLabel"
-        android:layout_marginStart="16dp"/>
+        android:layout_marginStart="8dp"/>
+
+    <TextView
+        android:id="@+id/tvOpacityLabel"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Opacity"
+        android:textColor="#CCCCCC"
+        android:layout_marginStart="16dp"
+        app:layout_constraintStart_toEndOf="@+id/seekBarSize"
+        app:layout_constraintTop_toTopOf="@+id/tvSizeLabel" />
+
+    <SeekBar
+        android:id="@+id/seekBarOpacity"
+        android:layout_width="150dp"
+        android:layout_height="wrap_content"
+        android:max="100"
+        android:progress="100"
+        app:layout_constraintStart_toEndOf="@+id/tvOpacityLabel"
+        app:layout_constraintTop_toTopOf="@+id/tvSizeLabel"
+        app:layout_constraintBottom_toBottomOf="@+id/tvSizeLabel"
+        android:layout_marginStart="8dp"/>
+
+    <!-- Style Selection -->
+    <TextView
+        android:id="@+id/tvStyleLabel"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Style:"
+        android:textColor="#CCCCCC"
+        android:layout_marginTop="20dp"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@+id/tvSizeLabel" />
+
+    <Spinner
+        android:id="@+id/spinnerStyle"
+        android:layout_width="250dp"
+        android:layout_height="40dp"
+        android:background="#33FFFFFF"
+        android:layout_marginStart="16dp"
+        app:layout_constraintStart_toEndOf="@+id/tvStyleLabel"
+        app:layout_constraintTop_toTopOf="@+id/tvStyleLabel"
+        app:layout_constraintBottom_toBottomOf="@+id/tvStyleLabel"/>
+
+    <!-- Mode Selection -->
+    <TextView
+        android:id="@+id/tvModeLabel"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Capture Mode:"
+        android:textColor="#CCCCCC"
+        android:layout_marginTop="20dp"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@+id/spinnerStyle" />
+
+    <RadioGroup
+        android:id="@+id/rgMode"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:layout_marginStart="16dp"
+        app:layout_constraintStart_toEndOf="@+id/tvModeLabel"
+        app:layout_constraintTop_toTopOf="@+id/tvModeLabel"
+        app:layout_constraintBottom_toBottomOf="@+id/tvModeLabel">
+
+        <RadioButton
+            android:id="@+id/rbNotification"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Notification (Recommended)"
+            android:textColor="#FFFFFF"
+            android:checked="true"
+            android:buttonTint="#00E5FF"/>
+
+        <RadioButton
+            android:id="@+id/rbLogcat"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Logcat (Backup)"
+            android:textColor="#FFFFFF"
+            android:layout_marginStart="16dp"
+            android:buttonTint="#FF9800"/>
+    </RadioGroup>
+
+    <!-- ADB Command Display -->
+    <TextView
+        android:id="@+id/tvAdbCommand"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:text="Run this via ADB for Logcat Mode:\nadb shell pm grant com.example.carfloatinglyrics android.permission.READ_LOGS"
+        android:textColor="#FF9800"
+        android:background="#222222"
+        android:padding="8dp"
+        android:visibility="gone"
+        android:typeface="monospace"
+        android:textSize="12sp"
+        android:layout_marginTop="8dp"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintTop_toBottomOf="@+id/rgMode" />
+
+    <Button
+        android:id="@+id/btnCopyCommand"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Copy Command"
+        android:backgroundTint="#FF9800"
+        android:textColor="#000000"
+        android:textSize="12sp"
+        android:padding="8dp"
+        android:visibility="gone"
+        android:layout_marginTop="8dp"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@+id/tvAdbCommand" />
 
     <TextView
         android:id="@+id/tvStatus"
@@ -86,7 +212,7 @@
         android:layout_height="wrap_content"
         android:text="Status: Ready"
         android:textColor="#AAAAAA"
-        android:layout_marginTop="16dp"
+        android:layout_marginTop="8dp"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintStart_toStartOf="parent" />
 
