@@ -37,6 +37,9 @@ public class MainActivity extends AppCompatActivity {
     private SharedPreferences prefs;
     private boolean isRestoring = false;
 
+    // Modes: 0 = Notification, 1 = Logcat Standard, 2 = Broadcast (Car Kit)
+    private int selectedMode = 0;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -92,12 +95,21 @@ public class MainActivity extends AppCompatActivity {
         // --- Listeners ---
 
         rgMode.setOnCheckedChangeListener((group, checkedId) -> {
-            boolean isLogcat = (checkedId == R.id.rbLogcat);
+            if (checkedId == R.id.rbNotification) {
+                selectedMode = 0;
+            } else if (checkedId == R.id.rbLogcat) {
+                selectedMode = 1;
+            } else if (checkedId == R.id.rbBroadcast) {
+                selectedMode = 2;
+            }
+            
             if (!isRestoring) {
-                prefs.edit().putInt("mode", isLogcat ? 1 : 0).apply();
+                prefs.edit().putInt("mode", selectedMode).apply();
             }
 
-            if (isLogcat) {
+            boolean needsLogcat = (selectedMode == 1);
+
+            if (needsLogcat) {
                 if (checkSelfPermission(android.Manifest.permission.READ_LOGS) != PackageManager.PERMISSION_GRANTED) {
                     tvAdbCommand.setVisibility(View.VISIBLE);
                     btnCopyCommand.setVisibility(View.VISIBLE);
@@ -126,8 +138,8 @@ public class MainActivity extends AppCompatActivity {
                 return;
             }
 
-            boolean isLogcatMode = (rgMode.getCheckedRadioButtonId() == R.id.rbLogcat);
-            if (isLogcatMode) {
+            boolean needsLogcat = (selectedMode == 1);
+            if (needsLogcat) {
                 if (checkSelfPermission(android.Manifest.permission.READ_LOGS) != PackageManager.PERMISSION_GRANTED) {
                     tvAdbCommand.setVisibility(View.VISIBLE);
                     btnCopyCommand.setVisibility(View.VISIBLE);
@@ -135,14 +147,16 @@ public class MainActivity extends AppCompatActivity {
                     return;
                 }
             } else {
-                if (!isNotificationListenerEnabled()) {
+                // Mode 0 requires Notification Listener
+                // Mode 2 (Broadcast) does NOT require it (Lower Level Intent Listening)
+                if (selectedMode == 0 && !isNotificationListenerEnabled()) {
                     Toast.makeText(this, "Please grant Notification Access to capture lyrics.", Toast.LENGTH_LONG).show();
                     Intent intent = new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS);
                     startActivity(intent);
                     return;
                 }
             }
-            startFloatingService(isLogcatMode);
+            startFloatingService(selectedMode);
         });
 
         btnStop.setOnClickListener(v -> {
@@ -226,7 +240,10 @@ public class MainActivity extends AppCompatActivity {
         spinStyle.setSelection(prefs.getInt("style_id", 0));
         
         int mode = prefs.getInt("mode", 0);
-        if (mode == 1) {
+        selectedMode = mode;
+        if (mode == 2) {
+            rgMode.check(R.id.rbBroadcast);
+        } else if (mode == 1) {
             rgMode.check(R.id.rbLogcat);
         } else {
             rgMode.check(R.id.rbNotification);
@@ -235,7 +252,7 @@ public class MainActivity extends AppCompatActivity {
         isRestoring = false;
 
         // Check permission after restore
-        if (rgMode.getCheckedRadioButtonId() == R.id.rbLogcat && 
+        if ((selectedMode == 1) && 
             checkSelfPermission(android.Manifest.permission.READ_LOGS) != PackageManager.PERMISSION_GRANTED) {
             tvAdbCommand.setVisibility(View.VISIBLE);
             btnCopyCommand.setVisibility(View.VISIBLE);
@@ -250,15 +267,19 @@ public class MainActivity extends AppCompatActivity {
         return flat != null && flat.contains(cn.flattenToString());
     }
 
-    private void startFloatingService(boolean useLogcat) {
+    private void startFloatingService(int mode) {
         Intent intent = new Intent(MainActivity.this, FloatingLyricService.class);
-        intent.putExtra(FloatingLyricService.EXTRA_MODE_LOGCAT, useLogcat);
+        intent.putExtra(FloatingLyricService.EXTRA_CAPTURE_MODE, mode);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             startForegroundService(intent);
         } else {
             startService(intent);
         }
-        tvStatus.setText("Status: Running (" + (useLogcat ? "Logcat" : "Notification") + ")");
+        
+        String statusMode = "Notification";
+        if (mode == 1) statusMode = "Logcat (LRC)";
+        if (mode == 2) statusMode = "Broadcast (Car Kit)";
+        tvStatus.setText("Status: Running (" + statusMode + ")");
     }
 
     private void sendCommandToService(String action, String extraKey, boolean value) {
@@ -281,17 +302,17 @@ public class MainActivity extends AppCompatActivity {
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         if (requestCode == CODE_DRAW_OVER_OTHER_APP_PERMISSION) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && Settings.canDrawOverlays(this)) {
-                boolean isLogcatMode = (rgMode.getCheckedRadioButtonId() == R.id.rbLogcat);
-                if (isLogcatMode) {
+                boolean needsLogcat = (selectedMode == 1);
+                if (needsLogcat) {
                      if (checkSelfPermission(android.Manifest.permission.READ_LOGS) == PackageManager.PERMISSION_GRANTED) {
-                         startFloatingService(true);
+                         startFloatingService(selectedMode);
                      }
                 } else {
-                    if (!isNotificationListenerEnabled()) {
+                    if (selectedMode == 0 && !isNotificationListenerEnabled()) {
                         Intent intent = new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS);
                         startActivity(intent);
                     } else {
-                        startFloatingService(false);
+                        startFloatingService(selectedMode);
                     }
                 }
             } else {

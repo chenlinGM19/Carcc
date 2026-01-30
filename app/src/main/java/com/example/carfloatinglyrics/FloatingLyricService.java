@@ -21,6 +21,7 @@ import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.provider.Settings;
+import android.text.TextUtils;
 import android.view.Gravity;
 import android.view.LayoutInflater;
 import android.view.MotionEvent;
@@ -49,7 +50,13 @@ public class FloatingLyricService extends Service {
     public static final String ACTION_UPDATE_TEXT_OPACITY = "com.example.carfloatinglyrics.UPDATE_TEXT_OPACITY";
     public static final String ACTION_TOGGLE_CLICK_THROUGH = "com.example.carfloatinglyrics.TOGGLE_CLICK_THROUGH";
     
-    public static final String EXTRA_MODE_LOGCAT = "mode_logcat";
+    public static final String EXTRA_CAPTURE_MODE = "capture_mode";
+    public static final String EXTRA_MODE_LOGCAT = "mode_logcat"; // Legacy support
+
+    public static final int MODE_NOTIFICATION = 0;
+    public static final int MODE_LOGCAT_STANDARD = 1;
+    public static final int MODE_BROADCAST_CARKIT = 2; // Was Bluetooth Logcat, now Broadcast
+
     private static final String PREFS_NAME = "CarLyricsPrefs";
 
     private WindowManager mWindowManager;
@@ -64,6 +71,7 @@ public class FloatingLyricService extends Service {
     private boolean isLocked = false;
     private boolean isViewAdded = false;
     private boolean isClickThrough = false;
+    private int currentCaptureMode = 0;
     
     // Independent Opacity States
     private int currentBgAlpha = 255; // 0-255
@@ -71,7 +79,9 @@ public class FloatingLyricService extends Service {
     private int currentStyleId = 0;
     
     private LyricUpdateReceiver lyricReceiver;
+    private CarBroadcastReceiver carBroadcastReceiver;
     private boolean isReceiverRegistered = false;
+    private boolean isCarBroadcastRegistered = false;
 
     private Thread logcatThread;
     private volatile boolean isLogcatRunning = false;
@@ -207,9 +217,15 @@ public class FloatingLyricService extends Service {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent != null) {
-            if (intent.hasExtra(EXTRA_MODE_LOGCAT)) {
+            
+            // Handle Mode Switching
+            if (intent.hasExtra(EXTRA_CAPTURE_MODE)) {
+                int mode = intent.getIntExtra(EXTRA_CAPTURE_MODE, MODE_NOTIFICATION);
+                switchCaptureMode(mode);
+            } else if (intent.hasExtra(EXTRA_MODE_LOGCAT)) {
+                // Legacy boolean support
                 boolean useLogcat = intent.getBooleanExtra(EXTRA_MODE_LOGCAT, false);
-                switchCaptureMode(useLogcat);
+                switchCaptureMode(useLogcat ? MODE_LOGCAT_STANDARD : MODE_NOTIFICATION);
             }
             
             if (intent.getAction() != null) {
@@ -358,15 +374,21 @@ public class FloatingLyricService extends Service {
         }
     }
 
-    private void switchCaptureMode(boolean useLogcat) {
-        if (useLogcat) {
-            stopReceiver();
+    private void switchCaptureMode(int mode) {
+        this.currentCaptureMode = mode;
+        stopLogcatReader();
+        stopReceiver(); // Stop Notification Receiver
+        stopCarBroadcastReceiver();
+
+        if (mode == MODE_NOTIFICATION) {
+            startReceiver(); // Start Notification Receiver
+            updateLyricUI("Mode: Notification");
+        } else if (mode == MODE_LOGCAT_STANDARD) {
             startLogcatReader();
-            updateLyricUI("Mode: Logcat Listener");
-        } else {
-            stopLogcatReader();
-            startReceiver();
-            updateLyricUI("Mode: Notification Listener");
+            updateLyricUI("Mode: LRC Logcat");
+        } else if (mode == MODE_BROADCAST_CARKIT) {
+            startCarBroadcastReceiver();
+            updateLyricUI("Mode: Broadcast (Car Kit)");
         }
     }
 
@@ -390,9 +412,60 @@ public class FloatingLyricService extends Service {
         }
     }
 
+    private void startCarBroadcastReceiver() {
+        if (isCarBroadcastRegistered) return;
+        carBroadcastReceiver = new CarBroadcastReceiver();
+        IntentFilter filter = new IntentFilter();
+        
+        // Standard Android Music
+        filter.addAction("com.android.music.metachanged");
+        filter.addAction("com.android.music.playstatechanged");
+        filter.addAction("com.android.music.playbackcomplete");
+        filter.addAction("com.android.music.queuechanged");
+        filter.addAction("com.android.bluetooth.metachanged");
+
+        // Vendor Specific (Chinese Head Units & Common Apps)
+        filter.addAction("com.htc.music.metachanged");
+        filter.addAction("fm.last.android.metachanged");
+        filter.addAction("com.sec.android.music.metachanged");
+        filter.addAction("com.nullsoft.winamp.metachanged");
+        filter.addAction("com.amazon.mp3.metachanged");
+        filter.addAction("com.miui.player.metachanged");
+        filter.addAction("com.real.IMP.metachanged");
+        filter.addAction("com.sonyericsson.music.metachanged");
+        filter.addAction("com.rdio.android.metachanged");
+        filter.addAction("com.samsung.sec.android.MusicPlayer.metachanged");
+        filter.addAction("com.andrew.apollo.metachanged");
+        
+        // Common Chinese Head Unit Bluetooth actions
+        filter.addAction("com.tw.bt.metachanged");
+        filter.addAction("com.yzx.bt.metachanged");
+        filter.addAction("autochips.intent.action.BT_INFO");
+        filter.addAction("com.microntek.bt.metachanged");
+        filter.addAction("com.suding.bt.metachanged");
+        filter.addAction("com.fyl.bt.metachanged");
+        filter.addAction("com.zjinnova.bluetooth.metachanged");
+        filter.addAction("com.xyauto.bt.metachanged");
+
+        if (Build.VERSION.SDK_INT >= 34) {
+            registerReceiver(carBroadcastReceiver, filter, Context.RECEIVER_EXPORTED);
+        } else {
+            registerReceiver(carBroadcastReceiver, filter);
+        }
+        isCarBroadcastRegistered = true;
+    }
+
+    private void stopCarBroadcastReceiver() {
+        if (isCarBroadcastRegistered && carBroadcastReceiver != null) {
+            unregisterReceiver(carBroadcastReceiver);
+            isCarBroadcastRegistered = false;
+        }
+    }
+
     private void startLogcatReader() {
         if (isLogcatRunning) return;
         isLogcatRunning = true;
+        
         logcatThread = new Thread(() -> {
             Process process = null;
             BufferedReader reader = null;
@@ -405,13 +478,15 @@ public class FloatingLyricService extends Service {
                 process = Runtime.getRuntime().exec("logcat -v threadtime");
                 reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
                 String line;
-                Pattern pattern = Pattern.compile("\\[(\\d{2}:\\d{2}\\.\\d{2,3})\\](.*)");
+                
+                Pattern patternStandard = Pattern.compile("\\[(\\d{2}:\\d{2}\\.\\d{2,3})\\](.*)");
+
                 while (isLogcatRunning && (line = reader.readLine()) != null) {
-                    Matcher matcher = pattern.matcher(line);
-                    if (matcher.find()) {
-                        String lyric = matcher.group(2).trim();
-                        if (!lyric.isEmpty()) updateLyricUI(lyric);
-                    }
+                     Matcher matcher = patternStandard.matcher(line);
+                     if (matcher.find()) {
+                         String lyric = matcher.group(2).trim();
+                         if (!lyric.isEmpty()) updateLyricUI(lyric);
+                     }
                 }
             } catch (Exception e) {
                 e.printStackTrace();
@@ -483,11 +558,44 @@ public class FloatingLyricService extends Service {
         }
     }
 
+    private class CarBroadcastReceiver extends BroadcastReceiver {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            // Low-level intent capture based on provided log:
+            // "mediaTitle" (Lyric/Title) and "artistName" (Artist)
+            
+            String title = intent.getStringExtra("mediaTitle");
+            String artist = intent.getStringExtra("artistName");
+            
+            // Fallback to standard Android keys if custom ones are missing
+            if (title == null) {
+                title = intent.getStringExtra("track");
+            }
+            if (artist == null) {
+                artist = intent.getStringExtra("artist");
+            }
+
+            StringBuilder sb = new StringBuilder();
+            if (!TextUtils.isEmpty(title)) {
+                sb.append(title);
+            }
+            if (!TextUtils.isEmpty(artist)) {
+                if (sb.length() > 0) sb.append(" - ");
+                sb.append(artist);
+            }
+            
+            if (sb.length() > 0) {
+                updateLyricUI(sb.toString());
+            }
+        }
+    }
+
     @Override
     public void onDestroy() {
         super.onDestroy();
         stopReceiver();
         stopLogcatReader();
+        stopCarBroadcastReceiver();
         try {
             if (isViewAdded && mFloatingView != null && mWindowManager != null) {
                 mWindowManager.removeView(mFloatingView);

@@ -184,7 +184,7 @@
             android:id="@+id/rbNotification"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Notification (Recommended)"
+            android:text="Notification"
             android:textColor="#FFFFFF"
             android:checked="true"
             android:buttonTint="#00E5FF"/>
@@ -193,10 +193,19 @@
             android:id="@+id/rbLogcat"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Logcat (Backup)"
+            android:text="Logcat (LRC)"
             android:textColor="#FFFFFF"
             android:layout_marginStart="16dp"
             android:buttonTint="#FF9800"/>
+
+        <RadioButton
+            android:id="@+id/rbBroadcast"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Broadcast (Car Kit)"
+            android:textColor="#FFFFFF"
+            android:layout_marginStart="16dp"
+            android:buttonTint="#E040FB"/>
     </RadioGroup>
 
     <!-- ADB Command Display -->
