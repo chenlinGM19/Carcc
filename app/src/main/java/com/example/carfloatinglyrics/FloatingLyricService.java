@@ -7,11 +7,13 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
+import android.content.pm.ServiceInfo;
 import android.graphics.PixelFormat;
 import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.provider.Settings;
 import android.view.Gravity;
 import android.view.LayoutInflater;
 import android.view.MotionEvent;
@@ -34,6 +36,7 @@ public class FloatingLyricService extends Service {
     
     // State
     private boolean isLocked = false;
+    private boolean isViewAdded = false;
     
     // Simulation
     private Handler simulationHandler = new Handler(Looper.getMainLooper());
@@ -61,42 +64,55 @@ public class FloatingLyricService extends Service {
         super.onCreate();
         
         // 1. Create Notification for Foreground Service
+        // Must be called immediately to prevent ANR/Crash on Android 14
         startMyForeground();
 
         // 2. Initialize Window Manager
-        mFloatingView = LayoutInflater.from(this).inflate(R.layout.window_floating_lyric, null);
-        mLyricText = mFloatingView.findViewById(R.id.tv_floating_lyric);
+        try {
+            mFloatingView = LayoutInflater.from(this).inflate(R.layout.window_floating_lyric, null);
+            mLyricText = mFloatingView.findViewById(R.id.tv_floating_lyric);
 
-        // Layout Params specific for Overlay
-        // TYPE_APPLICATION_OVERLAY for Android 8.0+, TYPE_PHONE for older
-        int layoutType;
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            layoutType = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY;
-        } else {
-            layoutType = WindowManager.LayoutParams.TYPE_PHONE;
+            // Layout Params specific for Overlay
+            int layoutType;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                layoutType = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY;
+            } else {
+                layoutType = WindowManager.LayoutParams.TYPE_PHONE;
+            }
+
+            params = new WindowManager.LayoutParams(
+                    WindowManager.LayoutParams.WRAP_CONTENT,
+                    WindowManager.LayoutParams.WRAP_CONTENT,
+                    layoutType,
+                    // FLAG_NOT_FOCUSABLE: pass touch events to windows behind if not clicking view
+                    // FLAG_LAYOUT_NO_LIMITS: allow drawing over status bar/nav bar
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                    PixelFormat.TRANSLUCENT);
+
+            // Initial Position
+            params.gravity = Gravity.TOP | Gravity.START;
+            params.x = 100;
+            params.y = 100;
+
+            mWindowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
+
+            // Check permission before adding view to prevent crash
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
+                // If permission missing, just don't add view, service will run in bg (or user needs to grant)
+            } else {
+                if (mWindowManager != null) {
+                    mWindowManager.addView(mFloatingView, params);
+                    isViewAdded = true;
+                    // 3. Setup Drag Listener only if view added
+                    setupTouchListener();
+                }
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+            // Prevent app crash if WindowManager fails
         }
-
-        params = new WindowManager.LayoutParams(
-                WindowManager.LayoutParams.WRAP_CONTENT,
-                WindowManager.LayoutParams.WRAP_CONTENT,
-                layoutType,
-                // FLAG_NOT_FOCUSABLE: pass touch events to windows behind if not clicking view
-                // FLAG_LAYOUT_NO_LIMITS: allow drawing over status bar/nav bar
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-                PixelFormat.TRANSLUCENT);
-
-        // Initial Position
-        params.gravity = Gravity.TOP | Gravity.START;
-        params.x = 100;
-        params.y = 100;
-
-        mWindowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
-        mWindowManager.addView(mFloatingView, params);
-
-        // 3. Setup Drag Listener
-        setupTouchListener();
         
-        // 4. Start Simulation Loop (replacing actual Logcat reading)
+        // 4. Start Simulation Loop
         startLyricsSimulation();
     }
 
@@ -109,7 +125,7 @@ public class FloatingLyricService extends Service {
 
             @Override
             public boolean onTouch(View v, MotionEvent event) {
-                if (isLocked) return false; // If locked, don't consume event, or allow click-through
+                if (isLocked) return false;
 
                 switch (event.getAction()) {
                     case MotionEvent.ACTION_DOWN:
@@ -125,7 +141,13 @@ public class FloatingLyricService extends Service {
                     case MotionEvent.ACTION_MOVE:
                         params.x = initialX + (int) (event.getRawX() - initialTouchX);
                         params.y = initialY + (int) (event.getRawY() - initialTouchY);
-                        mWindowManager.updateViewLayout(mFloatingView, params);
+                        try {
+                            if (isViewAdded && mWindowManager != null) {
+                                mWindowManager.updateViewLayout(mFloatingView, params);
+                            }
+                        } catch (Exception e) {
+                            e.printStackTrace();
+                        }
                         return true;
                 }
                 return false;
@@ -142,11 +164,15 @@ public class FloatingLyricService extends Service {
                     break;
                 case ACTION_TOGGLE_VISIBILITY:
                     boolean visible = intent.getBooleanExtra("visible", true);
-                    mFloatingView.setVisibility(visible ? View.VISIBLE : View.GONE);
+                    if (isViewAdded && mFloatingView != null) {
+                        mFloatingView.setVisibility(visible ? View.VISIBLE : View.GONE);
+                    }
                     break;
                 case ACTION_UPDATE_SIZE:
                     int size = intent.getIntExtra("size", 18);
-                    mLyricText.setTextSize(size);
+                    if (isViewAdded && mLyricText != null) {
+                        mLyricText.setTextSize(size);
+                    }
                     break;
             }
         }
@@ -166,27 +192,37 @@ public class FloatingLyricService extends Service {
         Intent notificationIntent = new Intent(this, MainActivity.class);
         PendingIntent pendingIntent = PendingIntent.getActivity(this, 0, notificationIntent, PendingIntent.FLAG_IMMUTABLE);
 
-        Notification notification = new NotificationCompat.Builder(this, channelId)
+        // Uses R.drawable.x (Make sure x.png exists in res/drawable and x.xml is deleted)
+        NotificationCompat.Builder builder = new NotificationCompat.Builder(this, channelId)
                 .setContentTitle("Car Floating Lyrics")
                 .setContentText("Lyrics overlay is active")
-                .setSmallIcon(R.drawable.ic_launcher)
-                .setContentIntent(pendingIntent)
-                .build();
+                .setSmallIcon(R.drawable.x)
+                .setContentIntent(pendingIntent);
+        
+        Notification notification = builder.build();
 
-        startForeground(1, notification);
+        // Android 14 (API 34) requires specifying foreground service type.
+        // Using SPECIAL_USE for overlays.
+        if (Build.VERSION.SDK_INT >= 34) {
+            try {
+                startForeground(1, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
+            } catch (Exception e) {
+                // Fallback or log error if system doesn't like the type, though Manifest declares it.
+                startForeground(1, notification);
+            }
+        } else {
+            startForeground(1, notification);
+        }
     }
     
-    // Simulate reading the provided Logcat data:
-    // "01-29 20:13:58.480 D/BluetoothPlayer(4844): onMediaInfoChanged! mediaTitle=The scars of your love..."
     private void startLyricsSimulation() {
         Runnable runnable = new Runnable() {
             @Override
             public void run() {
-                if (mFloatingView != null && mFloatingView.getVisibility() == View.VISIBLE) {
+                if (isViewAdded && mFloatingView != null && mFloatingView.getVisibility() == View.VISIBLE) {
                     mLyricText.setText(simulatedLyrics[lyricsIndex]);
                     lyricsIndex = (lyricsIndex + 1) % simulatedLyrics.length;
                 }
-                // Update every 3 seconds to simulate song progression
                 simulationHandler.postDelayed(this, 3000);
             }
         };
@@ -196,8 +232,15 @@ public class FloatingLyricService extends Service {
     @Override
     public void onDestroy() {
         super.onDestroy();
-        if (mFloatingView != null) {
-            mWindowManager.removeView(mFloatingView);
+        try {
+            if (isViewAdded && mFloatingView != null && mWindowManager != null) {
+                mWindowManager.removeView(mFloatingView);
+                isViewAdded = false;
+            }
+        } catch (IllegalArgumentException e) {
+            // View not attached
+        } catch (Exception e) {
+            e.printStackTrace();
         }
         simulationHandler.removeCallbacksAndMessages(null);
     }
